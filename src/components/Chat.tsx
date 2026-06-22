@@ -14,9 +14,6 @@ import {
 import {
   Tool,
   ToolHeader,
-  ToolContent,
-  ToolInput,
-  ToolOutput,
 } from "@/components/ai-elements/tool";
 import {
   PromptInput,
@@ -97,10 +94,6 @@ export function Chat({ sessionId }: ChatProps) {
                       return (
                         <Tool key={`${message.id}-${i}`}>
                           <ToolHeader type={p.type} state={p.state} />
-                          <ToolContent>
-                            <ToolInput input={p.input} />
-                            <ToolOutput output={p.output} errorText={p.errorText} />
-                          </ToolContent>
                         </Tool>
                       );
                     }
