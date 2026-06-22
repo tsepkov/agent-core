@@ -12,6 +12,10 @@ import {
   MessageResponse,
 } from "@/components/ai-elements/message";
 import {
+  Tool,
+  ToolHeader,
+} from "@/components/ai-elements/tool";
+import {
   PromptInput,
   PromptInputTextarea,
   PromptInputSubmit,
@@ -23,7 +27,7 @@ import { MessageSquare } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { readMessages, writeMessages } from "@/lib/sessions";
-import type { UIMessage } from "ai";
+import type { UIMessage, ToolUIPart } from "ai";
 
 interface ChatProps {
   sessionId: string;
@@ -77,16 +81,24 @@ export function Chat({ sessionId }: ChatProps) {
               <Message from={message.role as RenderableRole} key={message.id}>
                 <MessageContent>
                   {message.parts.map((part, i) => {
-                    switch (part.type) {
-                      case "text":
-                        return (
-                          <MessageResponse key={`${message.id}-${i}`}>
-                            {part.text}
-                          </MessageResponse>
-                        );
-                      default:
-                        return null;
+                    if (part.type === "text") {
+                      return (
+                        <MessageResponse key={`${message.id}-${i}`}>
+                          {part.text}
+                        </MessageResponse>
+                      );
                     }
+
+                    if (part.type.startsWith("tool-") || part.type === "dynamic-tool") {
+                      const p = part as ToolUIPart;
+                      return (
+                        <Tool key={`${message.id}-${i}`}>
+                          <ToolHeader type={p.type} state={p.state} />
+                        </Tool>
+                      );
+                    }
+
+                    return null;
                   })}
                 </MessageContent>
               </Message>

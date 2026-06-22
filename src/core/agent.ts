@@ -8,6 +8,7 @@ import { createDeliveryAdapter } from "./delivery.ts";
 import type { AgentTool } from "./tool.ts";
 import type { DeliveryAdapter, DeliveryTarget, OutboxMessage } from "./delivery.ts";
 import { errorClassifierMiddleware, LLM_RETRY_OPTIONS } from "./retry.ts";
+import { createToolSignalHooksProvider } from "./hooks.ts";
 
 export interface GenerateInput {
   ctx: ObjectContext;
@@ -43,22 +44,11 @@ export interface AgentConfig extends AgentHandlersConfig {
   name: string;
 }
 
-async function getHistory(ctx: ObjectContext): Promise<ModelMessage[]> {
-  return (await ctx.get<ModelMessage[]>("history")) ?? [];
-}
-
-async function updateHistory(ctx: ObjectContext, history: ModelMessage[]): Promise<void> {
-  ctx.set("history", history);
-}
-
-/**
- * Default durable generate: wrap the model with Restate's `durableCalls` middleware so every LLM
- * call is journaled (restored on retries), then run the AI SDK's native tool-calling loop. Tools
- * make their own steps durable via `ctx.run` (see {@link defineTool}). Injectable for unit tests.
- */
 async function durableGenerate({ ctx, model, system, messages, tools, maxSteps }: GenerateInput): Promise<GenerateOutput> {
   const durableModel = wrapLanguageModel({
     model,
+    // durableCalls is outermost (owns ctx.run retry loop); errorClassifierMiddleware is innermost
+    // (maps APICallError codes to TerminalError/RetryableError before they reach ctx.run).
     middleware: [durableCalls(ctx, LLM_RETRY_OPTIONS), errorClassifierMiddleware],
   });
   return generateText({
@@ -72,6 +62,14 @@ async function durableGenerate({ ctx, model, system, messages, tools, maxSteps }
 
 /**
  * Build the durable agent-loop handlers for a Restate Virtual Object.
+ *
+ * Kept separate from {@link createAgent} so the loop can be unit-tested with a fake context and
+ * an injected `generate` (no network, no Restate runtime). Operational chat history lives strictly
+ * in Restate KV; LLM durability comes from the `durableCalls` middleware.
+ *
+ * Delivery is decoupled from the HTTP request: on serverless the gateway invokes `chat` one-way
+ * and the connection is gone before the durable loop finishes. The final reply is pushed through
+ * the {@link createDeliveryAdapter} `deliver` hook (e.g. word-level pub/sub streaming).
  */
 export function createAgentHandlers({
   systemPrompt = "",
@@ -82,10 +80,15 @@ export function createAgentHandlers({
   delivery = createDeliveryAdapter(),
 }: AgentHandlersConfig) {
   return {
+    /**
+     * Invoked one-way by the gateway (`/chat/send`); returns immediately with a `messageId`
+     * instead of holding the connection. `req.replyTo = { channel, address }` tells `deliver`
+     * where to push.
+     */
     async chat(ctx: ObjectContext, req: ChatRequest) {
       const message = req?.message ?? "";
       const replyTo = req?.replyTo;
-      const history = await getHistory(ctx);
+      const history: ModelMessage[] = (await ctx.get<ModelMessage[]>("history")) ?? [];
       history.push({ role: "user", content: message });
 
       let replyContent = "";
@@ -95,14 +98,18 @@ export function createAgentHandlers({
           model,
           system: systemPrompt,
           messages: history,
+          // Tools are bound to this invocation's context (closure over ctx).
           tools: Object.fromEntries(tools.map((t) => [t.name, t.build(ctx)])) as ToolSet,
           maxSteps: maxSteps ?? 5,
         });
-
-        await updateHistory(ctx, [...history, ...response.messages]);
+        history.push(...response.messages);
+        ctx.set("history", history);
         replyContent = text;
       } catch (err) {
         if (!(err instanceof restate.TerminalError)) throw err;
+        // Permanent failure (non-retryable provider error or exhausted 2-minute retry window).
+        // Do NOT persist history — leave it unchanged so the user can retry cleanly.
+        // Surface a graceful error message via the outbox so the client doesn't time out polling.
         replyContent = "The model is temporarily unavailable (rate-limit or upstream error). Please try again.";
       }
 
@@ -124,12 +131,18 @@ export function createAgentHandlers({
   };
 }
 
-/**
- * Create a durable agent as a Restate Virtual Object, keyed per session/tenant.
- */
 export function createAgent(config: AgentConfig) {
   return restate.object({
     name: config.name,
     handlers: createAgentHandlers(config),
+    options: {
+      hooks: [
+        createToolSignalHooksProvider({
+          pubsubName: "pubsub",
+          ingressUrl: process.env.RESTATE_INGRESS_URL ?? "http://localhost:8080",
+          toolNames: new Set((config.tools ?? []).map((t) => t.name)),
+        }),
+      ],
+    },
   });
 }
