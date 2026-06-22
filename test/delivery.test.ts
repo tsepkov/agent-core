@@ -1,24 +1,32 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createDeliveryAdapter } from "../src/core/delivery.js";
+import { createDeliveryAdapter } from "../src/core/delivery.ts";
+import type { DeliveryPayload } from "../src/core/delivery.ts";
+import type { ObjectContext } from "@restatedev/restate-sdk";
 
 test("default adapter exposes a no-op deliver", async () => {
   const adapter = createDeliveryAdapter();
   assert.equal(typeof adapter.deliver, "function");
   // No-op resolves without throwing and returns nothing.
-  assert.equal(await adapter.deliver({}, { message: { content: "x" } }), undefined);
+  assert.equal(
+    await adapter.deliver({} as ObjectContext, { message: { id: "x", role: "assistant", content: "x", ts: 0 } }),
+    undefined
+  );
 });
 
 test("override replaces deliver and receives the ctx and payload", async () => {
-  const seen = [];
+  const seen: Array<{ ctx: ObjectContext; payload: DeliveryPayload }> = [];
   const adapter = createDeliveryAdapter({
     deliver: async (ctx, payload) => {
       seen.push({ ctx, payload });
     },
   });
 
-  const ctx = { key: "session-1" };
-  const payload = { target: { channel: "telegram", address: "42" }, message: { content: "hi" } };
+  const ctx = { key: "session-1" } as unknown as ObjectContext;
+  const payload: DeliveryPayload = {
+    target: { channel: "telegram", address: "42" },
+    message: { id: "1", role: "assistant", content: "hi", ts: 0 },
+  };
   await adapter.deliver(ctx, payload);
 
   assert.equal(seen.length, 1);

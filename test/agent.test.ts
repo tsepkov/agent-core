@@ -1,0 +1,154 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createAgentHandlers } from "../src/core/agent.ts";
+import type { ObjectContext, ObjectSharedContext } from "@restatedev/restate-sdk";
+import type { ModelMessage, ToolSet } from "ai";
+import type { AgentTool } from "../src/core/tool.ts";
+import type { GenerateInput, GenerateOutput } from "../src/core/agent.ts";
+
+/** Minimal in-memory stand-in for the Restate ObjectContext. */
+function fakeCtx(overrides: object = {}): ObjectContext {
+  const state = new Map<string, unknown>();
+  let seq = 0;
+  const ctx = {
+    key: "session-test",
+    rand: { uuidv4: () => `uuid-${++seq}` },
+    date: { now: () => 1700000000000 },
+    runs: [] as string[],
+    get: <T>(k: string) => Promise.resolve((state.has(k) ? state.get(k) : null) as T | null),
+    set: (k: string, v: unknown) => { state.set(k, v); },
+    clear: (k: string) => { state.delete(k); },
+    run: (name: string, fn: () => Promise<unknown>) => {
+      ctx.runs.push(name);
+      return fn();
+    },
+    _state: state,
+    ...overrides,
+  };
+  return ctx as unknown as ObjectContext;
+}
+
+type StubText = string | ((args: { messages: ModelMessage[] }) => string);
+
+function stubGenerate(text: StubText = "hello there", messages?: ModelMessage[]) {
+  return async (args: { messages: ModelMessage[] }): Promise<GenerateOutput> => ({
+    text: typeof text === "function" ? text(args) : text,
+    response: { messages: messages ?? [{ role: "assistant", content: "ok" }] },
+  });
+}
+
+test("chat returns a messageId, persists history and appends the reply to the outbox", async () => {
+  const handlers = createAgentHandlers({ model: {} as never, generate: stubGenerate("hello there") });
+
+  const ctx = fakeCtx();
+  const res = await handlers.chat(ctx, { message: "hi" });
+
+  assert.match(res.messageId, /^uuid-/);
+  assert.equal((res as Record<string, unknown>).text, undefined, "chat is detached: no synchronous text payload");
+
+  const state = (ctx as unknown as { _state: Map<string, unknown> })._state;
+  const history = state.get("history") as ModelMessage[];
+  assert.equal(history[0].role, "user");
+  assert.equal(history[0].content, "hi");
+
+  const outbox = state.get("outbox") as Array<{ id: string; role: string; content: string; ts: number }>;
+  assert.equal(outbox.length, 1);
+  assert.equal(outbox[0].id, res.messageId);
+  assert.equal(outbox[0].role, "assistant");
+  assert.equal(outbox[0].content, "hello there");
+  assert.equal(outbox[0].ts, 1700000000000);
+});
+
+test("chat pushes the reply through the delivery adapter inside a durable ctx.run", async () => {
+  const delivered: Array<{ target?: unknown; message: unknown }> = [];
+  const handlers = createAgentHandlers({
+    model: {} as never,
+    generate: stubGenerate("done"),
+    delivery: { deliver: async (_ctx, payload) => { delivered.push(payload); } },
+  });
+
+  const ctx = fakeCtx();
+  await handlers.chat(ctx, { message: "go", replyTo: { channel: "web", address: "session-1" } });
+
+  const runs = (ctx as unknown as { runs: string[] }).runs;
+  assert.deepEqual(runs, ["deliver"], "deliver runs as a checkpointed step");
+  assert.equal(delivered.length, 1);
+  assert.deepEqual(delivered[0].target, { channel: "web", address: "session-1" });
+  assert.equal((delivered[0].message as { content: string }).content, "done");
+});
+
+test("chat accumulates history across turns", async () => {
+  const handlers = createAgentHandlers({
+    model: {} as never,
+    generate: stubGenerate(({ messages }) => `turn-${messages.filter((m) => m.role === "user").length}`),
+  });
+
+  const ctx = fakeCtx();
+  await handlers.chat(ctx, { message: "first" });
+  await handlers.chat(ctx, { message: "second" });
+
+  const state = (ctx as unknown as { _state: Map<string, unknown> })._state;
+  const userTurns = (state.get("history") as ModelMessage[]).filter((m) => m.role === "user");
+  assert.equal(userTurns.length, 2);
+  assert.equal((state.get("outbox") as unknown[]).length, 2);
+});
+
+test("chat binds tools to the context and passes them to generate", async () => {
+  let passedTools: ToolSet | undefined;
+
+  const echoTool = {
+    name: "echo",
+    build: (ctx: ObjectContext) => ({ description: "echo", ctxKey: ctx.key, execute: async () => "x" }),
+  } as unknown as AgentTool;
+
+  const handlers = createAgentHandlers({
+    model: {} as never,
+    tools: [echoTool],
+    generate: async ({ tools }: GenerateInput): Promise<GenerateOutput> => {
+      passedTools = tools;
+      return { text: "done", response: { messages: [] } };
+    },
+  });
+
+  await handlers.chat(fakeCtx(), { message: "go" });
+  assert.ok(passedTools!.echo, "tool should be built and passed under its name");
+  assert.equal(
+    (passedTools!.echo as unknown as { ctxKey: string }).ctxKey,
+    "session-test",
+    "tool should be bound to the ctx"
+  );
+});
+
+test("pull returns outbox messages after the cursor and the advanced cursor", async () => {
+  const handlers = createAgentHandlers({ model: {} as never, generate: stubGenerate() });
+  const ctx = fakeCtx();
+  (ctx as unknown as { _state: Map<string, unknown> })._state.set("outbox", [{ id: "a" }, { id: "b" }, { id: "c" }]);
+
+  const first = await handlers.pull(ctx as unknown as ObjectSharedContext, { cursor: 0 });
+  assert.deepEqual(first.messages.map((m) => m.id), ["a", "b", "c"]);
+  assert.equal(first.cursor, 3);
+
+  const next = await handlers.pull(ctx as unknown as ObjectSharedContext, { cursor: first.cursor });
+  assert.deepEqual(next.messages, []);
+  assert.equal(next.cursor, 3);
+});
+
+test("pull on an empty session returns no messages at cursor 0", async () => {
+  const handlers = createAgentHandlers({ model: {} as never, generate: stubGenerate() });
+  const res = await handlers.pull(fakeCtx() as unknown as ObjectSharedContext, {});
+  assert.deepEqual(res, { messages: [], cursor: 0 });
+});
+
+test("reset clears both history and outbox", async () => {
+  const handlers = createAgentHandlers({ model: {} as never, generate: stubGenerate() });
+  const ctx = fakeCtx();
+  const state = (ctx as unknown as { _state: Map<string, unknown> })._state;
+  state.set("history", [{ role: "user", content: "x" }]);
+  state.set("outbox", [{ id: "a" }]);
+
+  const res = await handlers.reset(ctx);
+
+  assert.deepEqual(res, { ok: true });
+  assert.equal(state.has("history"), false);
+  assert.equal(state.has("outbox"), false);
+});

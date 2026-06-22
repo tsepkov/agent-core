@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveModelId } from "../src/core/llm.js";
+import { resolveModelId } from "../src/core/llm.ts";
 
 test("resolveModelId falls back to the default free model", () => {
   const prev = process.env.OPENROUTER_MODEL;

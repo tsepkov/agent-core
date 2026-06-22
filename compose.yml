@@ -1,53 +1,66 @@
-# Local stack for manual acceptance testing.
+# Local development stack — source-only, no build step.
 #
-#   1. npm install            # host installs node_modules (mounted into the app container)
-#   2. cp .env.example .env   # add your OPENROUTER_API_KEY
+#   1. npm install --legacy-peer-deps  # once, on the host
+#   2. cp .env.example .env            # add your OPENROUTER_API_KEY
 #   3. docker compose up
 #
-# The agent is detached from the HTTP connection: submit one-way and fetch the reply separately.
+# Open http://localhost:3000 for the chat UI (hot-reloads on every file save).
+# The Restate admin UI is at http://localhost:9070.
 #
-# 1. Submit (detached — the connection is NOT held open while the agent runs):
-#      curl http://localhost:8080/Manager/session-1/chat/send \
-#        -H 'content-type: application/json' -H 'idempotency-key: s1-turn-1' \
-#        -d '{"message":"Привет, кто ты?","replyTo":{"channel":"web","address":"session-1"}}'
-#    Returns immediately with {"messageId": ...}. (idempotency-key makes a retried webhook/refresh safe.)
+# The agent is decoupled from the HTTP connection. You can also test it directly:
 #
-# 2. Pull the reply (browser on reconnect/refresh; cursor advances as you consume messages):
-#      curl http://localhost:8080/Manager/session-1/pull \
-#        -H 'content-type: application/json' -d '{"cursor":0}'
-#    Returns {"messages":[...],"cursor":N}. A fork instead pushes via `deliver` (Telegram / pub-sub).
+# Submit a message (one-way, returns immediately):
+#   curl http://localhost:8080/Manager/session-1/chat/send \
+#     -H 'content-type: application/json' -H 'idempotency-key: s1-turn-1' \
+#     -d '{"message":"Привет, кто ты?","replyTo":{"channel":"web","address":"session-1"}}'
+#
+# Pull the reply (cursor advances as you consume messages):
+#   curl http://localhost:8080/Manager/session-1/pull \
+#     -H 'content-type: application/json' -d '{"cursor":0}'
+#
+# Direct agent h2c endpoint (dev): http://localhost:9080
 
 services:
   # Restate runtime: durable execution, ingress (8080) and admin (9070).
   restate:
     image: restatedev/restate:1.7
     environment:
-      # Bind to IPv4 explicitly (the default [::] IPv6 bind is unsupported on some hosts).
       RESTATE_INGRESS__BIND_ADDRESS: "0.0.0.0:8080"
       RESTATE_ADMIN__BIND_ADDRESS: "0.0.0.0:9070"
       RESTATE_BIND_ADDRESS: "0.0.0.0:5122"
     ports:
-      - "8080:8080" # ingress — call agents here
-      - "9070:9070" # admin — deployment registration, introspection UI
+      - "8080:8080"
+      - "9070:9070"
     volumes:
       - restate-data:/restate-data
 
-  # The agent deployment. Official Node image; source is bind-mounted and hot-reloaded with
-  # `node --watch`, so edits under ./src take effect without a container restart.
+  # Development app server: runs both Next.js (web UI, :3000) and the Restate h2c agent
+  # endpoint (:9080) from source. No build step — edits reflect immediately via HMR.
+  # node_modules are bind-mounted from the host (installed once with npm install).
+  #
+  # NOTE: Next.js dev server speaks HTTP/1.1. The Restate runtime requires HTTP/2 (h2c) to
+  # connect to service endpoints. We therefore run a separate h2c server on :9080 via
+  # src/restate-server.mjs (uses @restatedev/restate-sdk listen()). The Next.js route handler
+  # at /restate/* is kept for production (Vercel, HTTPS → HTTP/2 via TLS negotiation).
   app:
     image: node:22-slim
     working_dir: /app
-    command: node --watch src/index.js
+    command: >-
+      sh -c "node src/restate-server.mjs &
+      exec node_modules/.bin/next dev --turbopack -H 0.0.0.0"
+    environment:
+      NODE_ENV: development
+      RESTATE_INGRESS_URL: "http://restate:8080"
     env_file: .env
     volumes:
       - ./:/app
+    ports:
+      - "3000:3000"
+      - "9080:9080"
     depends_on:
       - restate
-    # Service endpoint (h2c) that Restate connects to. Not published to the host.
-    expose:
-      - "9080"
 
-  # One-shot: register the app deployment with Restate once both are reachable.
+  # One-shot: wait for the h2c agent server on :9080 to be ready, then register.
   register:
     image: curlimages/curl:8.10.1
     depends_on:
@@ -57,12 +70,14 @@ services:
     entrypoint:
       - sh
       - -c
-      - >
-        echo "waiting to register deployment http://app:9080 ...";
-        until curl -sf -X POST http://restate:9070/deployments
-        -H 'content-type: application/json'
-        -d '{"uri":"http://app:9080","force":true}';
-        do sleep 2; done;
+      - |
+        echo "waiting for Restate agent on app:9080 ...";
+        until curl -sf --http2-prior-knowledge http://app:9080/discover \
+          -H 'accept: application/vnd.restate.endpointmanifest.v3+json' > /dev/null 2>&1; do sleep 2; done;
+        echo "agent ready — registering deployment with Restate ...";
+        until curl -sf -X POST http://restate:9070/deployments \
+          -H 'content-type: application/json' \
+          -d '{"uri":"http://app:9080","force":true}'; do sleep 2; done;
         echo "registered.";
 
 volumes:

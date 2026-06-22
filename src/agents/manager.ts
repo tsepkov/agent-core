@@ -1,5 +1,5 @@
-import { createAgent } from "../core/agent.js";
-import { getModel } from "../core/llm.js";
+import { createAgent } from "../core/agent.ts";
+import { getModel } from "../core/llm.ts";
 
 /**
  * The single agent of the scaffold. Built from the reusable {@link createAgent} factory; a durable

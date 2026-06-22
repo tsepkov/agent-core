@@ -1,3 +1,8 @@
+export interface MemoryAdapter {
+  saveToLongTermMemory(key: string, value: unknown): Promise<void>;
+  retrieveFromLongTermMemory(key: string): Promise<unknown>;
+}
+
 /**
  * Long-term / semantic memory adapter.
  *
@@ -6,7 +11,7 @@
  * Forks implement this interface against their store (PostgreSQL, Vector DB, ...) without mixing
  * database state into the live execution cycle.
  */
-export function createMemoryAdapter(overrides = {}) {
+export function createMemoryAdapter(overrides: Partial<MemoryAdapter> = {}): MemoryAdapter {
   return {
     async saveToLongTermMemory(_key, _value) {
       // no-op by default

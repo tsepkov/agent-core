@@ -1,16 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
-import { defineTool } from "../src/core/tool.js";
+import { defineTool } from "../src/core/tool.ts";
+import type { ObjectContext } from "@restatedev/restate-sdk";
+import type { ToolExecutionOptions } from "ai";
 
-function fakeCtx(overrides = {}) {
+const fakeOptions = { toolCallId: "t1", messages: [] } as ToolExecutionOptions;
+
+function fakeCtx(overrides: object = {}): ObjectContext {
   return {
     rand: { uuidv4: () => "idem-123" },
-    run(_name, fn) {
+    run(_name: string, fn: () => Promise<unknown>) {
       return fn();
     },
     ...overrides,
-  };
+  } as unknown as ObjectContext;
 }
 
 test("defineTool exposes a name and a build(ctx) factory", () => {
@@ -28,9 +32,9 @@ test("defineTool exposes a name and a build(ctx) factory", () => {
 });
 
 test("durable tool runs its side effect inside ctx.run", async () => {
-  const ran = [];
+  const ran: string[] = [];
   const ctx = fakeCtx({
-    run(name, fn) {
+    run(name: string, fn: () => Promise<unknown>) {
       ran.push(name);
       return fn();
     },
@@ -43,7 +47,7 @@ test("durable tool runs its side effect inside ctx.run", async () => {
     execute: async ({ input }) => input.value * 2,
   }).build(ctx);
 
-  const out = await built.execute({ value: 21 });
+  const out = await built.execute!({ value: 21 }, fakeOptions);
   assert.equal(out, 42);
   assert.deepEqual(ran, ["save"]);
 });
@@ -64,13 +68,13 @@ test("non-durable tool bypasses ctx.run (for native Restate calls)", async () =>
     execute: async () => "ok",
   }).build(ctx);
 
-  const out = await built.execute({});
+  const out = await built.execute!({}, fakeOptions);
   assert.equal(out, "ok");
   assert.equal(usedRun, false);
 });
 
 test("mutating tool injects a deterministic idempotency key", async () => {
-  let seenKey;
+  let seenKey: string | undefined;
   const built = defineTool({
     name: "write",
     description: "write",
@@ -82,6 +86,6 @@ test("mutating tool injects a deterministic idempotency key", async () => {
     },
   }).build(fakeCtx());
 
-  await built.execute({});
+  await built.execute!({}, fakeOptions);
   assert.equal(seenKey, "idem-123");
 });
