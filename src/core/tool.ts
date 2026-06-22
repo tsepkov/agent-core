@@ -7,6 +7,9 @@ interface ToolConfig<TInput extends z.ZodType> {
   name: string;
   description: string;
   inputSchema: TInput;
+  /** Optional zod schema for the tool's return value — passed to the AI SDK so the model
+   *  receives a typed output schema, enabling structured tool responses. */
+  outputSchema?: z.ZodType;
   execute(args: { ctx: ObjectContext; input: z.infer<TInput>; idempotencyKey?: string }): Promise<unknown>;
   durable?: boolean;
   mutating?: boolean;
@@ -31,7 +34,7 @@ export interface AgentTool {
  * @param mutating inject a deterministic idempotency key for write operations
  */
 export function defineTool<TInput extends z.ZodType>(cfg: ToolConfig<TInput>): AgentTool {
-  const { name, description, inputSchema, execute, durable = true, mutating = false } = cfg;
+  const { name, description, inputSchema, outputSchema, execute, durable = true, mutating = false } = cfg;
   return {
     name,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -41,6 +44,7 @@ export function defineTool<TInput extends z.ZodType>(cfg: ToolConfig<TInput>): A
         description,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         inputSchema: inputSchema as z.ZodType<any>,
+        ...(outputSchema ? { outputSchema } : {}),
         execute: async (input: z.infer<TInput>): Promise<unknown> => {
           // Deterministic idempotency key from workflow state, for mutating writes.
           const idempotencyKey = mutating ? ctx.rand.uuidv4() : undefined;
