@@ -1,23 +1,9 @@
-/**
- * Chat bridge: translates useChat (streaming) into Restate one-way send + pubsub streaming.
- *
- * Flow:
- *   1. Read last user message text and sessionId from request body.
- *   2. Submit the message one-way to the durable agent via SDK client (idempotent).
- *   3. Subscribe to a per-turn pubsub topic (idempotencyKey) from offset 0.
- *      The delivery adapter publishes word-level chunks there as the LLM finishes.
- *   4. Stream each word chunk as a UIMessageStream text-delta so useChat shows tokens
- *      appearing progressively. Break on the 'done' sentinel.
- *
- * Per-turn topics eliminate the baseline-cursor problem: each turn always starts from offset 0.
- * On Restate replay the pubsub publishes are journaled and NOT re-sent, so reconnects get all
- * words from the existing topic immediately.
- */
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { randomUUID } from "node:crypto";
 import { connect, rpc } from "@restatedev/restate-sdk-clients";
 import { createPubsubClient } from "@restatedev/pubsub-client";
 import { manager } from "@/agents/manager";
+import { WireEvent } from "@/core/delivery";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -29,7 +15,6 @@ export async function POST(req: Request): Promise<Response> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const body = (await req.json()) as Record<string, any>;
-    // useChat sends { id } = the chat id we set to sessionId; we also accept explicit sessionId.
     const sessionId: string = body.sessionId ?? body.id ?? "";
     const messages: Array<{ role: string; id: string; parts?: Array<{ type: string; text?: string }> }> =
       body.messages ?? [];
@@ -47,8 +32,6 @@ export async function POST(req: Request): Promise<Response> {
     const ingress = connect({ url: INGRESS });
     const pubsubClient = createPubsubClient(ingress, { name: "pubsub" });
 
-    // Per-turn topic: each chat turn gets its own fresh pubsub topic so we always
-    // subscribe from offset 0 with no baseline cursor alignment needed.
     const idempotencyKey = lastUser?.id
       ? `${sessionId}-${lastUser.id}`
       : `${sessionId}-${randomUUID()}`;
@@ -63,30 +46,61 @@ export async function POST(req: Request): Promise<Response> {
     const deadline = setTimeout(() => ac.abort(), DEADLINE_MS);
 
     const textId = randomUUID();
+    let textOpen = false;
+
     const stream = createUIMessageStream({
       execute: async ({ writer }) => {
         writer.write({ type: "start" });
         writer.write({ type: "start-step" });
-        writer.write({ type: "text-start", id: textId });
 
         try {
           for await (const msg of pubsubClient.pull({ topic: turnTopic, offset: 0, signal: ac.signal })) {
-            const event = msg as { type?: string; delta?: string };
-            if (event.delta !== undefined) {
+            const event = msg as WireEvent;
+
+            if (event.kind === "tool-input") {
+              writer.write({
+                type: "tool-input-available",
+                toolCallId: event.toolCallId,
+                toolName: event.toolName,
+                input: {},
+              });
+            } else if (event.kind === "tool-output") {
+              writer.write({
+                type: "tool-output-available",
+                toolCallId: event.toolCallId,
+                output: null,
+              });
+            } else if (event.kind === "tool-error") {
+              writer.write({
+                type: "tool-output-error",
+                toolCallId: event.toolCallId,
+                errorText: event.errorText,
+              });
+            } else if (event.kind === "text") {
+              if (!textOpen) {
+                writer.write({ type: "text-start", id: textId });
+                textOpen = true;
+              }
               writer.write({ type: "text-delta", id: textId, delta: event.delta });
-            } else if (event.type === "done") {
+            } else if (event.kind === "done") {
               break;
             }
           }
         } catch (err) {
           if (!(err instanceof Error && err.name === "AbortError")) throw err;
+          if (!textOpen) {
+            writer.write({ type: "text-start", id: textId });
+            textOpen = true;
+          }
           writer.write({ type: "text-delta", id: textId, delta: "(Agent timeout — try again or check Restate logs.)" });
         } finally {
           clearTimeout(deadline);
           ac.abort();
         }
 
-        writer.write({ type: "text-end", id: textId });
+        if (textOpen) {
+          writer.write({ type: "text-end", id: textId });
+        }
         writer.write({ type: "finish-step" });
         writer.write({ type: "finish", finishReason: "stop" });
       },
