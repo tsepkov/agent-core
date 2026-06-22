@@ -1,0 +1,66 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - '**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+      - run: pnpm install
+      - run: pnpm test
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Vercel
+        id: vercel-deploy
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod'
+
+      - name: Register with Restate Cloud
+        env:
+          RESTATE_ADMIN_URL: ${{ secrets.RESTATE_ADMIN_URL }}
+          RESTATE_AUTH_TOKEN: ${{ secrets.RESTATE_AUTH_TOKEN }}
+          VERCEL_PROTECTION_BYPASS_TOKEN: ${{ secrets.VERCEL_PROTECTION_BYPASS_TOKEN }}
+        run: |
+          RESTATE_URL="${{ steps.vercel-deploy.outputs.preview-url }}/restate"
+          echo "Registering Restate deployment at $RESTATE_URL"
+
+          # Capture the output to extract deployment ID later if needed
+          RESULT=$(npx -y @restatedev/restate deployment register -y \
+            --use-http1.1 \
+            ${{ secrets.VERCEL_PROTECTION_BYPASS_TOKEN && format('--extra-header x-vercel-protection-bypass={0}', secrets.VERCEL_PROTECTION_BYPASS_TOKEN) }} \
+            "$RESTATE_URL")
+
+          echo "$RESULT"
+
+          # Try to extract deployment ID (usually looks like dp_...)
+          DEPLOYMENT_ID=$(echo "$RESULT" | grep -o 'dp_[a-zA-Z0-9]\+' | head -n 1 || echo "unknown")
+          echo "RESTATE_DEPLOYMENT_ID=$DEPLOYMENT_ID" >> $GITHUB_ENV
+          echo "deployment-id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
+
+      - name: Summary
+        run: |
+          echo "### Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Vercel URL**: ${{ steps.vercel-deploy.outputs.preview-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Restate Endpoint**: ${{ steps.vercel-deploy.outputs.preview-url }}/restate" >> $GITHUB_STEP_SUMMARY
+          echo "- **Restate Deployment ID**: ${{ env.RESTATE_DEPLOYMENT_ID }}" >> $GITHUB_STEP_SUMMARY
