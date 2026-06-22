@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { APICallError } from "ai";
 import { TerminalError, RetryableError } from "@restatedev/restate-sdk";
-import { classifyProviderError, parseRetryAfterSeconds } from "../src/core/retry.ts";
-import { createAgentHandlers } from "../src/core/agent.ts";
+import { classifyProviderError, parseRetryAfterSeconds } from "../src/core/index.ts";
+import { createAgentHandlers } from "../src/core/index.ts";
 import type { ObjectContext, ObjectSharedContext } from "@restatedev/restate-sdk";
 
 // ---------------------------------------------------------------------------
