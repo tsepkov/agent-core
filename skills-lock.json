@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "docker": {
+      "source": "dappvibe/skills",
+      "sourceType": "github",
+      "skillPath": "docker/SKILL.md",
+      "computedHash": "dd28ed2516f94b3ba73aba25dfb6630982a525645ad6ca19ab610b9874222817"
+    },
+    "nodejs-24": {
+      "source": "dappvibe/skills",
+      "sourceType": "github",
+      "skillPath": "nodejs-24/SKILL.md",
+      "computedHash": "b25c8170891f7a307937262b341b1b6ebf0fcdeb384ad4bdc09349d78ab13550"
+    }
+  }
+}
