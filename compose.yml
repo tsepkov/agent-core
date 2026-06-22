@@ -4,9 +4,18 @@
 #   2. cp .env.example .env   # add your OPENROUTER_API_KEY
 #   3. docker compose up
 #
-# Then send a request to the durable agent via the Restate ingress (:8080):
-#   curl http://localhost:8080/Manager/session-1/chat \
-#     -H 'content-type: application/json' -d '{"message":"Привет, кто ты?"}'
+# The agent is detached from the HTTP connection: submit one-way and fetch the reply separately.
+#
+# 1. Submit (detached — the connection is NOT held open while the agent runs):
+#      curl http://localhost:8080/Manager/session-1/chat/send \
+#        -H 'content-type: application/json' -H 'idempotency-key: s1-turn-1' \
+#        -d '{"message":"Привет, кто ты?","replyTo":{"channel":"web","address":"session-1"}}'
+#    Returns immediately with {"messageId": ...}. (idempotency-key makes a retried webhook/refresh safe.)
+#
+# 2. Pull the reply (browser on reconnect/refresh; cursor advances as you consume messages):
+#      curl http://localhost:8080/Manager/session-1/pull \
+#        -H 'content-type: application/json' -d '{"cursor":0}'
+#    Returns {"messages":[...],"cursor":N}. A fork instead pushes via `deliver` (Telegram / pub-sub).
 
 services:
   # Restate runtime: durable execution, ingress (8080) and admin (9070).
