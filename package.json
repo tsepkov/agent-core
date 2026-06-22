@@ -19,6 +19,7 @@
     "@restatedev/pubsub-client": "^0.3.2",
     "@restatedev/restate-sdk": "1.14.5",
     "@restatedev/restate-sdk-clients": "^1.14.5",
+    "@restatedev/restate-sdk-zod": "^1.14.5",
     "@restatedev/vercel-ai-middleware": "0.3.1",
     "@streamdown/cjk": "^1.0.3",
     "@streamdown/code": "^1.1.1",

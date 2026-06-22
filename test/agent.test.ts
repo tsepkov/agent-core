@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAgentHandlers } from "../src/core/agent.ts";
+import { createAgentHandlers } from "../src/core/index.ts";
 import type { ObjectContext } from "@restatedev/restate-sdk";
 import type { ModelMessage, ToolSet } from "ai";
-import type { AgentTool } from "../src/core/tool.ts";
-import type { GenerateInput, GenerateOutput } from "../src/core/agent.ts";
+import type { AgentTool } from "../src/core/index.ts";
+import type { GenerateInput, GenerateOutput } from "../src/core/index.ts";
 
 /** Minimal in-memory stand-in for the Restate ObjectContext. */
 function fakeCtx(overrides: object = {}): ObjectContext {

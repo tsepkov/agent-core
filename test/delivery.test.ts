@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createDeliveryAdapter } from "../src/core/delivery.ts";
-import type { DeliveryPayload } from "../src/core/delivery.ts";
+import { createDeliveryAdapter } from "../src/core/index.ts";
+import type { DeliveryPayload } from "../src/core/index.ts";
 import type { ObjectContext } from "@restatedev/restate-sdk";
 
 test("default adapter exposes a no-op deliver", async () => {

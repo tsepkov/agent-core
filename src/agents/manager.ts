@@ -1,12 +1,8 @@
-import { createAgent } from "../core/agent.ts";
-import { getModel } from "../core/llm.ts";
-import { createWebDeliveryAdapter } from "../core/delivery.ts";
+import { createAgent, getModel, createWebDeliveryAdapter } from "../core/index.ts";
 import { webSearchTool } from "../tools/web-search/index.ts";
 
 /**
- * The single agent of the scaffold. Built from the reusable {@link createAgent} factory; a durable
- * Virtual Object keyed per session (history lives in Restate KV). Add tools via `tools: [...]` and
- * {@link defineTool} as use-cases grow.
+ * The single agent of the scaffold. Built from the reusable {@link createAgent} factory.
  */
 export const manager = createAgent({
   name: "Manager",
