@@ -27,14 +27,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy to Vercel
-        id: vercel-deploy
-        uses: amondnet/vercel-action@v25
+      - uses: actions/setup-node@v4
         with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          vercel-args: '--prod'
+          node-version: 22
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel Environment Information
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Build Project Artifacts
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Deploy Project Artifacts to Vercel
+        id: vercel-deploy
+        run: |
+          DEPLOY_URL=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }} --yes)
+          echo "url=$DEPLOY_URL" >> $GITHUB_OUTPUT
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
       - name: Register with Restate Cloud
         env:
@@ -42,10 +61,9 @@ jobs:
           RESTATE_AUTH_TOKEN: ${{ secrets.RESTATE_AUTH_TOKEN }}
           VERCEL_PROTECTION_BYPASS_TOKEN: ${{ secrets.VERCEL_PROTECTION_BYPASS_TOKEN }}
         run: |
-          RESTATE_URL="${{ steps.vercel-deploy.outputs.preview-url }}/restate"
+          RESTATE_URL="${{ steps.vercel-deploy.outputs.url }}/restate"
           echo "Registering Restate deployment at $RESTATE_URL"
 
-          # Capture the output to extract deployment ID later if needed
           RESULT=$(npx -y @restatedev/restate deployment register -y \
             --use-http1.1 \
             ${{ secrets.VERCEL_PROTECTION_BYPASS_TOKEN && format('--extra-header x-vercel-protection-bypass={0}', secrets.VERCEL_PROTECTION_BYPASS_TOKEN) }} \
@@ -56,11 +74,10 @@ jobs:
           # Try to extract deployment ID (usually looks like dp_...)
           DEPLOYMENT_ID=$(echo "$RESULT" | grep -o 'dp_[a-zA-Z0-9]\+' | head -n 1 || echo "unknown")
           echo "RESTATE_DEPLOYMENT_ID=$DEPLOYMENT_ID" >> $GITHUB_ENV
-          echo "deployment-id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
 
       - name: Summary
         run: |
           echo "### Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- **Vercel URL**: ${{ steps.vercel-deploy.outputs.preview-url }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Restate Endpoint**: ${{ steps.vercel-deploy.outputs.preview-url }}/restate" >> $GITHUB_STEP_SUMMARY
+          echo "- **Vercel URL**: ${{ steps.vercel-deploy.outputs.url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Restate Endpoint**: ${{ steps.vercel-deploy.outputs.url }}/restate" >> $GITHUB_STEP_SUMMARY
           echo "- **Restate Deployment ID**: ${{ env.RESTATE_DEPLOYMENT_ID }}" >> $GITHUB_STEP_SUMMARY

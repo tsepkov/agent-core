@@ -24,8 +24,8 @@ To enable automatic deployment, you must configure the following secrets in your
 The deployment workflow (`.github/workflows/deploy.yml`) performs the following steps:
 
 1.  **Unit Tests**: Runs `pnpm test` on every push to any branch.
-2.  **Vercel Deployment**: On pushes to `master`, it deploys the application to Vercel in production mode.
-3.  **Restate Registration**: On pushes to `master`, it registers the Vercel deployment URL (e.g., `https://your-project.vercel.app/restate`) with Restate Cloud. It uses the `VERCEL_PROTECTION_BYPASS_TOKEN` to allow Restate Cloud to access the deployment even if protection is enabled.
+2.  **Vercel Deployment**: On pushes to `master`, it deploys the application to Vercel in production mode using the Vercel CLI (the official recommended approach for custom CI/CD).
+3.  **Restate Registration**: On pushes to `master`, it registers the Vercel deployment URL with Restate Cloud using the official `@restatedev/restate` CLI. It uses the `VERCEL_PROTECTION_BYPASS_TOKEN` to allow Restate Cloud to access the deployment even if protection is enabled.
 
 ## Local Development
 
