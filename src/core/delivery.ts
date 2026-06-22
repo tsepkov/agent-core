@@ -1,4 +1,5 @@
 import type { ObjectContext } from "@restatedev/restate-sdk";
+import { createPubsubPublisher } from "@restatedev/pubsub";
 
 export interface DeliveryTarget {
   channel?: string;
