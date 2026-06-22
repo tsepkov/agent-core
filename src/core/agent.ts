@@ -7,6 +7,7 @@ import { durableCalls } from "@restatedev/vercel-ai-middleware";
 import { createDeliveryAdapter } from "./delivery.ts";
 import type { AgentTool } from "./tool.ts";
 import type { DeliveryAdapter, DeliveryTarget, OutboxMessage } from "./delivery.ts";
+import { errorClassifierMiddleware, LLM_RETRY_OPTIONS } from "./retry.ts";
 
 export interface GenerateInput {
   ctx: ObjectContext;
@@ -59,7 +60,9 @@ export interface AgentConfig extends AgentHandlersConfig {
 async function durableGenerate({ ctx, model, system, messages, tools, maxSteps }: GenerateInput): Promise<GenerateOutput> {
   const durableModel = wrapLanguageModel({
     model,
-    middleware: durableCalls(ctx, { maxRetryAttempts: 3 }),
+    // durableCalls is outermost (owns ctx.run retry loop); errorClassifierMiddleware is innermost
+    // (maps APICallError codes to TerminalError/RetryableError before they reach ctx.run).
+    middleware: [durableCalls(ctx, LLM_RETRY_OPTIONS), errorClassifierMiddleware],
   });
   return generateText({
     model: durableModel,
@@ -102,23 +105,32 @@ export function createAgentHandlers({
       const history: ModelMessage[] = (await ctx.get<ModelMessage[]>("history")) ?? [];
       history.push({ role: "user", content: message });
 
-      const { text, response } = await generate({
-        ctx,
-        model,
-        system: systemPrompt,
-        messages: history,
-        // Tools are bound to this invocation's context (closure over ctx).
-        tools: Object.fromEntries(tools.map((t) => [t.name, t.build(ctx)])) as ToolSet,
-        maxSteps: maxSteps ?? 5,
-      });
-
-      history.push(...response.messages);
-      ctx.set("history", history);
+      let replyContent = "";
+      try {
+        const { text, response } = await generate({
+          ctx,
+          model,
+          system: systemPrompt,
+          messages: history,
+          // Tools are bound to this invocation's context (closure over ctx).
+          tools: Object.fromEntries(tools.map((t) => [t.name, t.build(ctx)])) as ToolSet,
+          maxSteps: maxSteps ?? 5,
+        });
+        history.push(...response.messages);
+        ctx.set("history", history);
+        replyContent = text;
+      } catch (err) {
+        if (!(err instanceof restate.TerminalError)) throw err;
+        // Permanent failure (non-retryable provider error or exhausted 2-minute retry window).
+        // Do NOT persist history — leave it unchanged so the user can retry cleanly.
+        // Surface a graceful error message via the outbox so the client doesn't time out polling.
+        replyContent = "The model is temporarily unavailable (rate-limit or upstream error). Please try again.";
+      }
 
       const reply: OutboxMessage = {
         id: ctx.rand.uuidv4(),
         role: "assistant",
-        content: text,
+        content: replyContent,
         ts: await ctx.date.now(),
       };
 
