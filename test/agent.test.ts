@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createAgentHandlers } from "../src/core/agent.ts";
-import type { ObjectContext, ObjectSharedContext } from "@restatedev/restate-sdk";
+import type { ObjectContext } from "@restatedev/restate-sdk";
 import type { ModelMessage, ToolSet } from "ai";
 import type { AgentTool } from "../src/core/tool.ts";
 import type { GenerateInput, GenerateOutput } from "../src/core/agent.ts";
@@ -37,7 +37,7 @@ function stubGenerate(text: StubText = "hello there", messages?: ModelMessage[])
   });
 }
 
-test("chat returns a messageId, persists history and appends the reply to the outbox", async () => {
+test("chat returns a messageId and persists history", async () => {
   const handlers = createAgentHandlers({ model: {} as never, generate: stubGenerate("hello there") });
 
   const ctx = fakeCtx();
@@ -50,16 +50,9 @@ test("chat returns a messageId, persists history and appends the reply to the ou
   const history = state.get("history") as ModelMessage[];
   assert.equal(history[0].role, "user");
   assert.equal(history[0].content, "hi");
-
-  const outbox = state.get("outbox") as Array<{ id: string; role: string; content: string; ts: number }>;
-  assert.equal(outbox.length, 1);
-  assert.equal(outbox[0].id, res.messageId);
-  assert.equal(outbox[0].role, "assistant");
-  assert.equal(outbox[0].content, "hello there");
-  assert.equal(outbox[0].ts, 1700000000000);
 });
 
-test("chat pushes the reply through the delivery adapter inside a durable ctx.run", async () => {
+test("chat pushes the reply through the delivery adapter", async () => {
   const delivered: Array<{ target?: unknown; message: unknown }> = [];
   const handlers = createAgentHandlers({
     model: {} as never,
@@ -67,11 +60,8 @@ test("chat pushes the reply through the delivery adapter inside a durable ctx.ru
     delivery: { deliver: async (_ctx, payload) => { delivered.push(payload); } },
   });
 
-  const ctx = fakeCtx();
-  await handlers.chat(ctx, { message: "go", replyTo: { channel: "web", address: "session-1" } });
+  await handlers.chat(fakeCtx(), { message: "go", replyTo: { channel: "web", address: "session-1" } });
 
-  const runs = (ctx as unknown as { runs: string[] }).runs;
-  assert.deepEqual(runs, ["deliver"], "deliver runs as a checkpointed step");
   assert.equal(delivered.length, 1);
   assert.deepEqual(delivered[0].target, { channel: "web", address: "session-1" });
   assert.equal((delivered[0].message as { content: string }).content, "done");
@@ -90,7 +80,6 @@ test("chat accumulates history across turns", async () => {
   const state = (ctx as unknown as { _state: Map<string, unknown> })._state;
   const userTurns = (state.get("history") as ModelMessage[]).filter((m) => m.role === "user");
   assert.equal(userTurns.length, 2);
-  assert.equal((state.get("outbox") as unknown[]).length, 2);
 });
 
 test("chat binds tools to the context and passes them to generate", async () => {
@@ -119,36 +108,14 @@ test("chat binds tools to the context and passes them to generate", async () => 
   );
 });
 
-test("pull returns outbox messages after the cursor and the advanced cursor", async () => {
-  const handlers = createAgentHandlers({ model: {} as never, generate: stubGenerate() });
-  const ctx = fakeCtx();
-  (ctx as unknown as { _state: Map<string, unknown> })._state.set("outbox", [{ id: "a" }, { id: "b" }, { id: "c" }]);
-
-  const first = await handlers.pull(ctx as unknown as ObjectSharedContext, { cursor: 0 });
-  assert.deepEqual(first.messages.map((m) => m.id), ["a", "b", "c"]);
-  assert.equal(first.cursor, 3);
-
-  const next = await handlers.pull(ctx as unknown as ObjectSharedContext, { cursor: first.cursor });
-  assert.deepEqual(next.messages, []);
-  assert.equal(next.cursor, 3);
-});
-
-test("pull on an empty session returns no messages at cursor 0", async () => {
-  const handlers = createAgentHandlers({ model: {} as never, generate: stubGenerate() });
-  const res = await handlers.pull(fakeCtx() as unknown as ObjectSharedContext, {});
-  assert.deepEqual(res, { messages: [], cursor: 0 });
-});
-
-test("reset clears both history and outbox", async () => {
+test("reset clears history", async () => {
   const handlers = createAgentHandlers({ model: {} as never, generate: stubGenerate() });
   const ctx = fakeCtx();
   const state = (ctx as unknown as { _state: Map<string, unknown> })._state;
   state.set("history", [{ role: "user", content: "x" }]);
-  state.set("outbox", [{ id: "a" }]);
 
   const res = await handlers.reset(ctx);
 
   assert.deepEqual(res, { ok: true });
   assert.equal(state.has("history"), false);
-  assert.equal(state.has("outbox"), false);
 });

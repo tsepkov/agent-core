@@ -15,7 +15,10 @@
     "@ai-sdk/react": "^3.0.0",
     "@base-ui/react": "^1.6.0",
     "@openrouter/ai-sdk-provider": "2.9.1",
+    "@restatedev/pubsub": "^0.3.2",
+    "@restatedev/pubsub-client": "^0.3.2",
     "@restatedev/restate-sdk": "1.14.5",
+    "@restatedev/restate-sdk-clients": "^1.14.5",
     "@restatedev/vercel-ai-middleware": "0.3.1",
     "@streamdown/cjk": "^1.0.3",
     "@streamdown/code": "^1.1.1",
@@ -49,6 +52,8 @@
   },
   "private": true,
   "pnpm": {
-    "onlyBuiltDependencies": ["sharp"]
+    "onlyBuiltDependencies": [
+      "sharp"
+    ]
   }
 }

@@ -1,5 +1,5 @@
 import * as restate from "@restatedev/restate-sdk";
-import type { ObjectContext, ObjectSharedContext } from "@restatedev/restate-sdk";
+import type { ObjectContext } from "@restatedev/restate-sdk";
 import { generateText, stepCountIs, wrapLanguageModel } from "ai";
 import type { ModelMessage, ToolSet } from "ai";
 import type { LanguageModelV3 } from "@ai-sdk/provider";
@@ -28,15 +28,6 @@ type GenerateFn = (input: GenerateInput) => Promise<GenerateOutput>;
 interface ChatRequest {
   message?: string;
   replyTo?: DeliveryTarget;
-}
-
-interface PullRequest {
-  cursor?: number;
-}
-
-interface PullResponse {
-  messages: OutboxMessage[];
-  cursor: number;
 }
 
 export interface AgentHandlersConfig {
@@ -81,9 +72,8 @@ async function durableGenerate({ ctx, model, system, messages, tools, maxSteps }
  * in Restate KV; LLM durability comes from the `durableCalls` middleware.
  *
  * Delivery is decoupled from the HTTP request: on serverless the gateway invokes `chat` one-way
- * and the connection is gone before the durable loop finishes. The final reply is (a) appended to
- * a durable per-session `outbox` (read back via `pull`) and (b) pushed through the
- * {@link createDeliveryAdapter} `deliver` hook (live channel, e.g. Telegram or pub/sub).
+ * and the connection is gone before the durable loop finishes. The final reply is pushed through
+ * the {@link createDeliveryAdapter} `deliver` hook (e.g. word-level pub/sub streaming).
  */
 export function createAgentHandlers({
   systemPrompt = "",
@@ -134,30 +124,15 @@ export function createAgentHandlers({
         ts: await ctx.date.now(),
       };
 
-      // Durable source of truth for pull-based catch-up (browser refresh/reconnect).
-      const outbox: OutboxMessage[] = (await ctx.get<OutboxMessage[]>("outbox")) ?? [];
-      outbox.push(reply);
-      ctx.set("outbox", outbox);
-
-      // Push path: durable, retried if the channel fails (no-op unless the fork wires a transport).
-      await ctx.run("deliver", () => delivery.deliver(ctx, { target: replyTo, message: reply }));
+      // Push path: adapters using ctx.objectSendClient are already journaled; external adapters
+      // should wrap their side-effects in ctx.run internally.
+      await delivery.deliver(ctx, { target: replyTo, message: reply });
 
       return { messageId: reply.id };
     },
 
-    /**
-     * Shared (concurrent-read) handler: returns outbox messages after `cursor` plus the new cursor.
-     * Clients call this on (re)connect to catch up on anything missed by the live channel.
-     */
-    pull: restate.handlers.object.shared(async (ctx: ObjectSharedContext, req: PullRequest): Promise<PullResponse> => {
-      const cursor = req?.cursor ?? 0;
-      const outbox: OutboxMessage[] = (await ctx.get<OutboxMessage[]>("outbox")) ?? [];
-      return { messages: outbox.slice(cursor), cursor: outbox.length };
-    }),
-
     async reset(ctx: ObjectContext) {
       ctx.clear("history");
-      ctx.clear("outbox");
       return { ok: true };
     },
   };

@@ -172,22 +172,15 @@ function fakeCtx(overrides: object = {}): ObjectContext {
   return ctx as unknown as ObjectContext;
 }
 
-test("chat: TerminalError from generate → outbox gets error message, no throw", async () => {
+test("chat: TerminalError from generate → returns messageId without throw", async () => {
   const handlers = createAgentHandlers({
     model: {} as never,
     generate: async () => { throw new TerminalError("upstream error", { errorCode: 500 }); },
   });
 
-  const ctx = fakeCtx();
-  const res = await handlers.chat(ctx, { message: "hello" });
+  const res = await handlers.chat(fakeCtx(), { message: "hello" });
 
   assert.match(res.messageId, /^uuid-/);
-
-  const state = (ctx as unknown as { _state: Map<string, unknown> })._state;
-  const outbox = state.get("outbox") as Array<{ role: string; content: string }>;
-  assert.equal(outbox.length, 1);
-  assert.equal(outbox[0].role, "assistant");
-  assert.ok(outbox[0].content.includes("unavailable"), "error message should mention unavailability");
 });
 
 test("chat: TerminalError from generate → history not persisted (user can retry cleanly)", async () => {

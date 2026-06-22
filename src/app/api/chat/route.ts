@@ -1,48 +1,29 @@
 /**
- * Chat bridge: translates useChat (streaming) into Restate one-way send + pull.
+ * Chat bridge: translates useChat (streaming) into Restate one-way send + pubsub streaming.
  *
  * Flow:
  *   1. Read last user message text and sessionId from request body.
- *   2. Snapshot the current outbox cursor (baseline) via pull.
- *   3. Submit the message one-way to the durable agent (chat/send).
- *   4. Poll pull until the agent appends a new reply to the outbox.
- *   5. Return the reply as a UIMessageStream so useChat + AI Elements work natively.
+ *   2. Submit the message one-way to the durable agent via SDK client (idempotent).
+ *   3. Subscribe to a per-turn pubsub topic (idempotencyKey) from offset 0.
+ *      The delivery adapter publishes word-level chunks there as the LLM finishes.
+ *   4. Stream each word chunk as a UIMessageStream text-delta so useChat shows tokens
+ *      appearing progressively. Break on the 'done' sentinel.
  *
- * No streaming tokens from the LLM — the outbox only holds final replies. The response
- * arrives in one chunk after the agent finishes (which may take several seconds).
+ * Per-turn topics eliminate the baseline-cursor problem: each turn always starts from offset 0.
+ * On Restate replay the pubsub publishes are journaled and NOT re-sent, so reconnects get all
+ * words from the existing topic immediately.
  */
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { randomUUID } from "node:crypto";
+import { connect, rpc } from "@restatedev/restate-sdk-clients";
+import { createPubsubClient } from "@restatedev/pubsub-client";
+import { manager } from "@/agents/manager";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const INGRESS = process.env.RESTATE_INGRESS_URL ?? "http://localhost:8080";
-const POLL_INTERVAL_MS = 700;
-const POLL_DEADLINE_MS = (maxDuration - 5) * 1000;
-
-interface OutboxMessage {
-  id: string;
-  role: string;
-  content: string;
-  ts: number;
-}
-
-async function pull(
-  sessionId: string,
-  cursor: number
-): Promise<{ messages: OutboxMessage[]; cursor: number }> {
-  const res = await fetch(`${INGRESS}/Manager/${sessionId}/pull`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ cursor }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "(unreadable)");
-    throw new Error(`pull ${res.status}: ${body}`);
-  }
-  return res.json() as Promise<{ messages: OutboxMessage[]; cursor: number }>;
-}
+const DEADLINE_MS = (maxDuration - 5) * 1000;
 
 export async function POST(req: Request): Promise<Response> {
   try {
@@ -63,53 +44,48 @@ export async function POST(req: Request): Promise<Response> {
       });
     }
 
-    // Snapshot current cursor so we only wait for the reply to *this* message.
-    const { cursor: baseline } = await pull(sessionId, 0);
+    const ingress = connect({ url: INGRESS });
+    const pubsubClient = createPubsubClient(ingress, { name: "pubsub" });
 
+    // Per-turn topic: each chat turn gets its own fresh pubsub topic so we always
+    // subscribe from offset 0 with no baseline cursor alignment needed.
     const idempotencyKey = lastUser?.id
       ? `${sessionId}-${lastUser.id}`
       : `${sessionId}-${randomUUID()}`;
+    const turnTopic = idempotencyKey;
 
-    const sendRes = await fetch(`${INGRESS}/Manager/${sessionId}/chat/send`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "idempotency-key": idempotencyKey,
-      },
-      body: JSON.stringify({
-        message: text,
-        replyTo: { channel: "web", address: sessionId },
-      }),
-    });
-    if (!sendRes.ok) {
-      const err = await sendRes.text().catch(() => "(unreadable)");
-      throw new Error(`chat/send ${sendRes.status}: ${err}`);
-    }
+    await ingress.objectSendClient(manager, sessionId).chat(
+      { message: text, replyTo: { channel: "web", address: turnTopic } },
+      rpc.sendOpts({ idempotencyKey }),
+    );
 
-    // Poll for the reply.
-    const deadline = Date.now() + POLL_DEADLINE_MS;
-    let replyText: string | null = null;
-
-    while (Date.now() < deadline) {
-      await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL_MS));
-      const { messages: newMsgs } = await pull(sessionId, baseline);
-      if (newMsgs.length > 0) {
-        replyText = newMsgs[newMsgs.length - 1].content ?? "";
-        break;
-      }
-    }
-
-    if (replyText === null) {
-      replyText = "(Agent timeout — try again or check Restate logs.)";
-    }
+    const ac = new AbortController();
+    const deadline = setTimeout(() => ac.abort(), DEADLINE_MS);
 
     const textId = randomUUID();
     const stream = createUIMessageStream({
-      execute: ({ writer }) => {
+      execute: async ({ writer }) => {
         writer.write({ type: "start" });
         writer.write({ type: "start-step" });
         writer.write({ type: "text-start", id: textId });
-        writer.write({ type: "text-delta", id: textId, delta: replyText! });
+
+        try {
+          for await (const msg of pubsubClient.pull({ topic: turnTopic, offset: 0, signal: ac.signal })) {
+            const event = msg as { type?: string; delta?: string };
+            if (event.delta !== undefined) {
+              writer.write({ type: "text-delta", id: textId, delta: event.delta });
+            } else if (event.type === "done") {
+              break;
+            }
+          }
+        } catch (err) {
+          if (!(err instanceof Error && err.name === "AbortError")) throw err;
+          writer.write({ type: "text-delta", id: textId, delta: "(Agent timeout — try again or check Restate logs.)" });
+        } finally {
+          clearTimeout(deadline);
+          ac.abort();
+        }
+
         writer.write({ type: "text-end", id: textId });
         writer.write({ type: "finish-step" });
         writer.write({ type: "finish", finishReason: "stop" });
