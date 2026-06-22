@@ -4,4 +4,3 @@ export * from "./llm.ts";
 export * from "./delivery.ts";
 export * from "./memory.ts";
 export * from "./retry.ts";
-export * from "./web-delivery.ts";
