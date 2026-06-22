@@ -4,4 +4,3 @@ restate-data/
 .idea/
 .next/
 next-env.d.ts
-graphify-out/cache/
