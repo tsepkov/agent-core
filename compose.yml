@@ -1,0 +1,60 @@
+# Local stack for manual acceptance testing.
+#
+#   1. npm install            # host installs node_modules (mounted into the app container)
+#   2. cp .env.example .env   # add your OPENROUTER_API_KEY
+#   3. docker compose up
+#
+# Then send a request to the durable agent via the Restate ingress (:8080):
+#   curl http://localhost:8080/Manager/session-1/chat \
+#     -H 'content-type: application/json' -d '{"message":"Привет, кто ты?"}'
+
+services:
+  # Restate runtime: durable execution, ingress (8080) and admin (9070).
+  restate:
+    image: restatedev/restate:1.7
+    environment:
+      # Bind to IPv4 explicitly (the default [::] IPv6 bind is unsupported on some hosts).
+      RESTATE_INGRESS__BIND_ADDRESS: "0.0.0.0:8080"
+      RESTATE_ADMIN__BIND_ADDRESS: "0.0.0.0:9070"
+      RESTATE_BIND_ADDRESS: "0.0.0.0:5122"
+    ports:
+      - "8080:8080" # ingress — call agents here
+      - "9070:9070" # admin — deployment registration, introspection UI
+    volumes:
+      - restate-data:/restate-data
+
+  # The agent deployment. Official Node image; source is bind-mounted and hot-reloaded with
+  # `node --watch`, so edits under ./src take effect without a container restart.
+  app:
+    image: node:22-slim
+    working_dir: /app
+    command: node --watch src/index.js
+    env_file: .env
+    volumes:
+      - ./:/app
+    depends_on:
+      - restate
+    # Service endpoint (h2c) that Restate connects to. Not published to the host.
+    expose:
+      - "9080"
+
+  # One-shot: register the app deployment with Restate once both are reachable.
+  register:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      - restate
+      - app
+    restart: "no"
+    entrypoint:
+      - sh
+      - -c
+      - >
+        echo "waiting to register deployment http://app:9080 ...";
+        until curl -sf -X POST http://restate:9070/deployments
+        -H 'content-type: application/json'
+        -d '{"uri":"http://app:9080","force":true}';
+        do sleep 2; done;
+        echo "registered.";
+
+volumes:
+  restate-data:

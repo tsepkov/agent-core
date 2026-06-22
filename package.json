@@ -1,0 +1,22 @@
+{
+  "name": "agent-scaffold",
+  "version": "0.1.0",
+  "description": "Abstract durable-agent scaffold (Restate + Vercel AI SDK). Fork to build use-cases.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@ai-sdk/mcp": "1.0.14",
+    "@openrouter/ai-sdk-provider": "2.9.1",
+    "@restatedev/restate-sdk": "1.14.5",
+    "@restatedev/vercel-ai-middleware": "0.3.1",
+    "ai": "6.0.52",
+    "superjson": "2.2.2",
+    "zod": "4.4.3"
+  },
+  "private": true
+}
