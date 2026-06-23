@@ -139,6 +139,48 @@ ctx.rejectAwakeable(
 );
 ```
 
+# OOP Virtual Objects
+
+Restate discovers handlers via `Object.keys()` on the instance — only **own enumerable properties** are found, not prototype methods.
+
+Rules:
+- Define handlers as **arrow function class fields** (`handler = async (ctx, req) => {}`) so they land on the instance.
+- Store config in **JS native private fields** (`#field`) — these are non-enumerable and invisible to Restate's discovery.
+- Never use TypeScript `private` keyword for config fields: TypeScript `private` compiles to plain instance properties, which Restate will try to register as handlers and throw `Unexpected handler type`.
+
+```typescript
+import type { ObjectContext } from "@restatedev/restate-sdk";
+
+interface MyHandlers {
+  chat(ctx: ObjectContext, req: ChatRequest): Promise<Result>;
+  reset(ctx: ObjectContext): Promise<{ ok: boolean }>;
+}
+
+class MyObject implements MyHandlers {
+  // JS native private — invisible to Restate
+  readonly #config: string;
+
+  constructor(config: string) {
+    this.#config = config;
+  }
+
+  // Arrow field — own property, discovered by Restate
+  chat = async (ctx: ObjectContext, req: ChatRequest): Promise<Result> => {
+    // use this.#config
+  };
+
+  reset = async (ctx: ObjectContext): Promise<{ ok: boolean }> => {
+    ctx.clearAll();
+    return { ok: true };
+  };
+}
+
+export const myObject = restate.object({
+  name: "myObject",
+  handlers: new MyObject("...") as MyHandlers,
+});
+```
+
 # Best Practices
 * Use awakeables for services/objects coordinating with external systems
 * Use durable promises for workflow signaling
