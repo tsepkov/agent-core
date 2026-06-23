@@ -5,3 +5,4 @@ restate-data/
 .next/
 next-env.d.ts
 graphify-out/cache/
+tsconfig.tsbuildinfo
