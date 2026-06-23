@@ -8,8 +8,19 @@ import MemoryClient from "mem0ai";
  * session. Long-term memory is a *separate* concern: durable facts, preferences, and conclusions
  * that persist across sessions.
  *
- * Subclass this to provide a custom memory backend. The default factory returns
- * `Mem0MemoryAdapter` when MEM0_API_KEY is set, otherwise `NoopMemoryAdapter`.
+ * Subclass this to provide a custom memory backend. The default factory (`createMemoryAdapter`)
+ * selects a backend by the MEMORY_BACKEND env var.
+ *
+ * Migration path (hosted → self-hosted):
+ *   Current:  MEMORY_BACKEND=mem0-hosted (or auto + MEM0_API_KEY)
+ *             → Mem0HostedMemoryAdapter using mem0.ai platform API.
+ *   Future:   MEMORY_BACKEND=mem0-oss
+ *             → Mem0OssMemoryAdapter using mem0ai/oss with a Qdrant-compatible vector store.
+ *             YDB exposes a Qdrant-compatible layer — point the Qdrant driver at YDB to keep
+ *             everything in a single database already used by maxbot.
+ *   The remember/recall interface does NOT change on migration; only the adapter and config do.
+ *   Durability is each adapter's responsibility: wrap side-effecting calls in ctx.run so that
+ *   Restate replay does not cause double-writes (see Mem0HostedMemoryAdapter below).
  */
 export abstract class MemoryAdapter {
   /** Extract and persist important facts from a completed exchange. */
@@ -35,10 +46,10 @@ export class NoopMemoryAdapter extends MemoryAdapter {
 }
 
 // ---------------------------------------------------------------------------
-// Mem0 hosted implementation
+// Mem0 hosted implementation (mem0.ai platform, API key)
 // ---------------------------------------------------------------------------
 
-export class Mem0MemoryAdapter extends MemoryAdapter {
+export class Mem0HostedMemoryAdapter extends MemoryAdapter {
   private readonly client: MemoryClient;
 
   constructor(apiKey?: string) {
@@ -66,15 +77,39 @@ export class Mem0MemoryAdapter extends MemoryAdapter {
   }
 }
 
+// Future: Mem0OssMemoryAdapter
+// Uses mem0ai/oss with a Qdrant-compatible vector store (e.g. YDB's Qdrant-compatible layer).
+// Activated by MEMORY_BACKEND=mem0-oss. Not implemented until we migrate off the free tier.
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 
+/** Controls which memory backend createMemoryAdapter() returns. */
+export type MemoryBackend =
+  | "auto"         // back-compat default: mem0-hosted if MEM0_API_KEY is set, else noop
+  | "noop"         // force no-op (useful in tests or when memory is not needed)
+  | "mem0-hosted"; // force Mem0HostedMemoryAdapter (requires MEM0_API_KEY)
+  // future: | "mem0-oss"  — self-hosted mem0 OSS with Qdrant/YDB vector store
+
 /**
- * Returns a MemoryAdapter instance.
- * - If MEM0_API_KEY is set: returns Mem0MemoryAdapter.
- * - Otherwise: returns NoopMemoryAdapter (safe for local dev without a key).
+ * Returns a MemoryAdapter instance based on the MEMORY_BACKEND environment variable.
+ *
+ *   MEMORY_BACKEND=auto (default) — hosted if MEM0_API_KEY present, otherwise noop.
+ *   MEMORY_BACKEND=noop          — always noop, even if MEM0_API_KEY is set.
+ *   MEMORY_BACKEND=mem0-hosted   — always hosted (throws if MEM0_API_KEY is missing).
  */
 export function createMemoryAdapter(): MemoryAdapter {
-  return process.env.MEM0_API_KEY ? new Mem0MemoryAdapter() : new NoopMemoryAdapter();
+  const backend = (process.env.MEMORY_BACKEND ?? "auto") as MemoryBackend;
+  switch (backend) {
+    case "noop":
+      return new NoopMemoryAdapter();
+    case "mem0-hosted":
+      return new Mem0HostedMemoryAdapter();
+    // case "mem0-oss":
+    //   return new Mem0OssMemoryAdapter();
+    case "auto":
+    default:
+      return process.env.MEM0_API_KEY ? new Mem0HostedMemoryAdapter() : new NoopMemoryAdapter();
+  }
 }
