@@ -11,6 +11,29 @@ import type { DeliveryAdapter, DeliveryTarget, OutboxMessage, WireEvent } from "
 import { errorClassifierMiddleware, LLM_RETRY_OPTIONS } from "./retry.ts";
 import { createMemoryAdapter, MemoryAdapter } from "./memory.ts";
 
+/**
+ * Per-step metering report emitted by the agent loop.
+ * Carries raw LLM usage + the list of tools invoked in that step.
+ * Pricing (roubles, rates, per-tool prices) is the caller's concern — not the core's.
+ */
+export interface StepUsageReport {
+  /** Zero-based index of the step, as reported by the AI SDK. Stable across Restate replays.
+   *  Use it to build a deterministic ctx.run key for idempotent debiting. */
+  step: number;
+  llm: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    /** Real USD cost as reported by the provider (e.g. OpenRouter with usage.include).
+     *  0 when the provider did not include cost information. */
+    costUsd: number;
+    /** Wire model id actually used by the provider for this step. */
+    model: string;
+  };
+  /** Distinct tools called in this step, with call counts. Empty array when no tools ran. */
+  tools: { name: string; calls: number }[];
+}
+
 export interface ChatFilePart {
   mediaType: string;
   url: string;
@@ -38,6 +61,7 @@ export interface GenerateInput {
   tools: ToolSet;
   maxSteps: number;
   emitToolEvent?: (event: WireEvent) => void;
+  onUsage?: (ctx: ObjectContext, report: StepUsageReport) => Promise<void>;
 }
 
 export interface GenerateOutput {
@@ -53,6 +77,15 @@ export interface AgentObjectConfig {
   maxSteps?: number;
   delivery?: DeliveryAdapter;
   memory?: MemoryAdapter;
+  /**
+   * Server-side metering callback, invoked once per completed agent step.
+   * The billing context wraps any side effects (debits) in ctx.run using
+   * `report.step` as part of the idempotency key — Restate guarantees
+   * exactly-once execution even on replay.
+   *
+   * Never called for browser/pubsub delivery — usage never reaches the client.
+   */
+  onUsage?: (ctx: ObjectContext, report: StepUsageReport) => Promise<void>;
 }
 
 /** Structural contract restate.object() reads from its config argument. */
@@ -72,6 +105,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
   protected readonly maxSteps: number;
   protected readonly delivery: DeliveryAdapter;
   protected readonly memory: MemoryAdapter;
+  protected readonly onUsage?: (ctx: ObjectContext, report: StepUsageReport) => Promise<void>;
 
   protected constructor(config: AgentObjectConfig) {
     this.systemPrompt = config.systemPrompt ?? "";
@@ -80,6 +114,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
     this.maxSteps = config.maxSteps ?? 20;
     this.delivery = config.delivery ?? new NoopDeliveryAdapter();
     this.memory = config.memory ?? createMemoryAdapter();
+    this.onUsage = config.onUsage;
   }
 
   // Restate does Object.entries(config.handlers) — getter returns only bound methods, not the full instance.
@@ -131,6 +166,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
         tools: Object.fromEntries(this.tools.map((t) => [t.name, t.build(ctx)])) as ToolSet,
         maxSteps: this.maxSteps,
         emitToolEvent,
+        onUsage: this.onUsage,
       });
       if (reasoningText && emitToolEvent) {
         emitToolEvent({ kind: "reasoning", text: reasoningText });
@@ -165,7 +201,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
     return { ok: true };
   }
 
-  protected async durableGenerate({ ctx, model, system, messages, tools, maxSteps, emitToolEvent }: GenerateInput): Promise<GenerateOutput> {
+  protected async durableGenerate({ ctx, model, system, messages, tools, maxSteps, emitToolEvent, onUsage }: GenerateInput): Promise<GenerateOutput> {
     const durableModel = wrapLanguageModel({
       model,
       middleware: [durableCalls(ctx, LLM_RETRY_OPTIONS), errorClassifierMiddleware],
@@ -176,6 +212,42 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
       messages,
       tools,
       stopWhen: [stepCountIs(maxSteps)],
+      // Ask OpenRouter (and compatible providers) to include real USD cost in metadata.
+      providerOptions: {
+        openrouter: { usage: { include: true } },
+      },
+      onStepFinish: onUsage
+        ? async (step) => {
+            // Build tool call counts for this step.
+            const toolCountMap = new Map<string, number>();
+            for (const tc of step.toolCalls) {
+              toolCountMap.set(tc.toolName, (toolCountMap.get(tc.toolName) ?? 0) + 1);
+            }
+            const stepTools = Array.from(toolCountMap.entries()).map(([name, calls]) => ({ name, calls }));
+
+            // Extract provider-reported cost (OpenRouter sets providerMetadata.openrouter.usage.cost).
+            const openrouterMeta = step.providerMetadata?.openrouter as
+              | { usage?: { cost?: number } }
+              | undefined;
+            const costUsd = openrouterMeta?.usage?.cost ?? 0;
+
+            const report: StepUsageReport = {
+              step: step.stepNumber,
+              llm: {
+                // AI SDK v6 renamed promptTokens→inputTokens, completionTokens→outputTokens.
+                // We normalise to the conventional names used by billing callers.
+                promptTokens: step.usage.inputTokens ?? 0,
+                completionTokens: step.usage.outputTokens ?? 0,
+                totalTokens: step.usage.totalTokens ?? 0,
+                costUsd,
+                model: step.model.modelId,
+              },
+              tools: stepTools,
+            };
+
+            await onUsage(ctx, report);
+          }
+        : undefined,
       experimental_onToolCallStart: emitToolEvent
         ? ({ toolCall }) => {
             emitToolEvent({
