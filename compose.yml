@@ -39,9 +39,10 @@ services:
     image: node:22-slim
     working_dir: /app
     command: >-
-      node --inspect=0.0.0.0:9229 node_modules/.bin/next dev --turbopack -H 0.0.0.0
+      node_modules/.bin/next dev --turbopack -H 0.0.0.0
     environment:
       NODE_ENV: development
+      NODE_OPTIONS: "--inspect=0.0.0.0:9229"
       RESTATE_INGRESS_URL: "http://restate:8080"
     env_file: .env
     volumes:

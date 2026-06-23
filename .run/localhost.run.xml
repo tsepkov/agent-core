@@ -1,0 +1,6 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="localhost" type="ChromiumRemoteDebugType" factoryName="Chromium Remote" port="9230">
+    <mapping url="file:///app" local-file="$PROJECT_DIR$" />
+    <method v="2" />
+  </configuration>
+</component>
