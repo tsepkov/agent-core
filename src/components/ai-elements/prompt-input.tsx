@@ -1,4 +1,4 @@
-// @ts-nocheck — generated file; @base-ui/react event-type mismatch with installed version
+// @ts-nocheck — vendor component from ai-elements registry; BaseUIEvent type mismatch with installed @base-ui/react version
 "use client";
 
 import {
