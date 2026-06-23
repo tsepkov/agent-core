@@ -4,10 +4,10 @@ import { generateText, stepCountIs, wrapLanguageModel } from "ai";
 import type { ModelMessage, ToolSet } from "ai";
 import type { LanguageModelV3 } from "@ai-sdk/provider";
 import { durableCalls } from "@restatedev/vercel-ai-middleware";
-import { createPubsubPublisher } from "@restatedev/pubsub";
-import { NoopDeliveryAdapter } from "./delivery/index.ts";
+import { NoopDeliveryAdapter, NoopStreamAdapter } from "./delivery/index.ts";
 import type { AgentTool } from "./tool/index.ts";
 import type { DeliveryAdapter, DeliveryTarget, OutboxMessage, WireEvent } from "./delivery/index.ts";
+import type { StreamAdapter } from "./delivery/index.ts";
 import { errorClassifierMiddleware, LLM_RETRY_OPTIONS } from "./retry.ts";
 import { createMemoryAdapter, MemoryAdapter } from "./memory.ts";
 
@@ -60,7 +60,7 @@ export interface GenerateInput {
   messages: ModelMessage[];
   tools: ToolSet;
   maxSteps: number;
-  emitToolEvent?: (event: WireEvent) => void;
+  emitToolEvent: (event: WireEvent) => void;
   onUsage?: (ctx: ObjectContext, report: StepUsageReport) => Promise<void>;
 }
 
@@ -77,6 +77,12 @@ export interface AgentObjectConfig {
   maxSteps?: number;
   delivery?: DeliveryAdapter;
   memory?: MemoryAdapter;
+  /**
+   * Real-time side-channel for intermediate agent events (tokens, tool I/O, reasoning).
+   * Defaults to NoopStreamAdapter (events discarded). Supply PubsubStreamAdapter for web
+   * clients, or a custom adapter for other channels (e.g. MAX messenger push).
+   */
+  stream?: StreamAdapter;
   /**
    * Server-side metering callback, invoked once per completed agent step.
    * The billing context wraps any side effects (debits) in ctx.run using
@@ -105,6 +111,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
   protected readonly maxSteps: number;
   protected readonly delivery: DeliveryAdapter;
   protected readonly memory: MemoryAdapter;
+  protected readonly stream: StreamAdapter;
   protected readonly onUsage?: (ctx: ObjectContext, report: StepUsageReport) => Promise<void>;
 
   protected constructor(config: AgentObjectConfig) {
@@ -114,6 +121,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
     this.maxSteps = config.maxSteps ?? 20;
     this.delivery = config.delivery ?? new NoopDeliveryAdapter();
     this.memory = config.memory ?? createMemoryAdapter();
+    this.stream = config.stream ?? new NoopStreamAdapter();
     this.onUsage = config.onUsage;
   }
 
@@ -150,11 +158,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
         ]
       : history;
 
-    const topic = replyTo?.channel === "web" ? (replyTo.address ?? "") : "";
-    const publish = topic ? createPubsubPublisher("pubsub") : null;
-    const emitToolEvent: ((event: WireEvent) => void) | undefined = publish && topic
-      ? (event) => publish(ctx, topic, event)
-      : undefined;
+    const emitToolEvent = (event: WireEvent) => this.stream.emit(ctx, replyTo, event);
 
     let replyContent = "";
     try {
@@ -168,7 +172,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
         emitToolEvent,
         onUsage: this.onUsage,
       });
-      if (reasoningText && emitToolEvent) {
+      if (reasoningText) {
         emitToolEvent({ kind: "reasoning", text: reasoningText });
       }
       history.push(...response.messages);
@@ -248,36 +252,32 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
             await onUsage(ctx, report);
           }
         : undefined,
-      experimental_onToolCallStart: emitToolEvent
-        ? ({ toolCall }) => {
-            emitToolEvent({
-              kind: "tool-input",
-              toolCallId: toolCall.toolCallId,
-              toolName: toolCall.toolName,
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              input: (toolCall as any).input,
-            });
-          }
-        : undefined,
-      experimental_onToolCallFinish: emitToolEvent
-        ? (event) => {
-            if (event.success) {
-              emitToolEvent({
-                kind: "tool-output",
-                toolCallId: event.toolCall.toolCallId,
-                toolName: event.toolCall.toolName,
-                output: event.output,
-              });
-            } else {
-              emitToolEvent({
-                kind: "tool-error",
-                toolCallId: event.toolCall.toolCallId,
-                toolName: event.toolCall.toolName,
-                errorText: String(event.error),
-              });
-            }
-          }
-        : undefined,
+      experimental_onToolCallStart: ({ toolCall }) => {
+        emitToolEvent({
+          kind: "tool-input",
+          toolCallId: toolCall.toolCallId,
+          toolName: toolCall.toolName,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          input: (toolCall as any).input,
+        });
+      },
+      experimental_onToolCallFinish: (event) => {
+        if (event.success) {
+          emitToolEvent({
+            kind: "tool-output",
+            toolCallId: event.toolCall.toolCallId,
+            toolName: event.toolCall.toolName,
+            output: event.output,
+          });
+        } else {
+          emitToolEvent({
+            kind: "tool-error",
+            toolCallId: event.toolCall.toolCallId,
+            toolName: event.toolCall.toolName,
+            errorText: String(event.error),
+          });
+        }
+      },
     });
   }
 }

@@ -2,7 +2,7 @@ import * as restate from "@restatedev/restate-sdk";
 import { AgentObject } from "@/core/agent";
 import type { StepUsageReport } from "@/core/agent";
 import type { ObjectContext } from "@restatedev/restate-sdk";
-import { WebDeliveryAdapter } from "@/core/delivery";
+import { WebDeliveryAdapter, PubsubStreamAdapter } from "@/core/delivery";
 import { getModel } from "@/core/llm";
 import { createMemoryAdapter } from "@/core/memory";
 import { webSearchTool } from "@/tools/web-search/index";
@@ -31,6 +31,7 @@ class ManagerObject extends AgentObject {
       tools,
       model: getModel(),
       delivery: new WebDeliveryAdapter(),
+      stream: new PubsubStreamAdapter(),
       memory: createMemoryAdapter(),
       onUsage: logUsage,
     });
