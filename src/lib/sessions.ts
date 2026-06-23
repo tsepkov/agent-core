@@ -20,6 +20,7 @@ export interface Session {
 const SESSIONS_KEY = "agent.sessions";
 const ACTIVE_KEY = "agent.activeSession";
 const messagesKey = (id: string) => `agent.messages.${id}`;
+const durationsKey = (id: string) => `agent.durations.${id}`;
 
 function readSessions(): Session[] {
   try {
@@ -53,6 +54,18 @@ export function readMessages(id: string): UIMessage[] {
 
 export function writeMessages(id: string, messages: UIMessage[]) {
   localStorage.setItem(messagesKey(id), JSON.stringify(messages));
+}
+
+export function readDurations(id: string): Record<string, number> {
+  try {
+    return JSON.parse(localStorage.getItem(durationsKey(id)) ?? "{}") as Record<string, number>;
+  } catch {
+    return {};
+  }
+}
+
+export function writeDurations(id: string, durations: Record<string, number>) {
+  localStorage.setItem(durationsKey(id), JSON.stringify(durations));
 }
 
 export function useSessions() {
@@ -98,8 +111,9 @@ export function useSessions() {
       setSessions((prev) => {
         const next = prev.filter((s) => s.id !== id);
         writeSessions(next);
-        // Remove stored messages for the deleted session.
+        // Remove stored messages and durations for the deleted session.
         localStorage.removeItem(messagesKey(id));
+        localStorage.removeItem(durationsKey(id));
         return next;
       });
       setActiveId((prev) => {

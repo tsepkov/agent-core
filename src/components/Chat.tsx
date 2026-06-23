@@ -36,7 +36,7 @@ import {
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { usePubsubChat } from "@/hooks/usePubsubChat";
-import { readMessages, writeMessages } from "@/lib/sessions";
+import { readDurations, readMessages, writeDurations, writeMessages } from "@/lib/sessions";
 import type { UIMessage, DynamicToolUIPart } from "ai";
 
 const AttachmentPreviews = () => {
@@ -56,8 +56,8 @@ const AttachmentPreviews = () => {
 
 export function Chat({ sessionId }: { sessionId: string }) {
   const [initialMessages] = useState<UIMessage[]>(() => readMessages(sessionId));
-  // duration in seconds, keyed by assistant message id
-  const [durations, setDurations] = useState<Record<string, number>>({});
+  // duration in seconds, keyed by assistant message id — persisted to localStorage
+  const [durations, setDurations] = useState<Record<string, number>>(() => readDurations(sessionId));
   const [elapsedS, setElapsedS] = useState(0);
   const sendTimeRef = useRef<number | null>(null);
 
@@ -85,7 +85,11 @@ export function Chat({ sessionId }: { sessionId: string }) {
       sendTimeRef.current = null;
       const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
       if (lastAssistant) {
-        setDurations((prev) => ({ ...prev, [lastAssistant.id]: durationS }));
+        setDurations((prev) => {
+          const next = { ...prev, [lastAssistant.id]: durationS };
+          writeDurations(sessionId, next);
+          return next;
+        });
       }
     }
   }, [status, messages]);
