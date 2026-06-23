@@ -1,7 +1,7 @@
 import type { ObjectContext } from "@restatedev/restate-sdk";
 import { createPubsubPublisher } from "@restatedev/pubsub";
-import { DeliveryAdapter } from "./index.ts";
-import type { DeliveryPayload, WireEvent } from "./index.ts";
+import { DeliveryAdapter } from "./base.ts";
+import type { DeliveryPayload, WireEvent } from "./base.ts";
 
 export class WebDeliveryAdapter extends DeliveryAdapter {
   private readonly publish: ReturnType<typeof createPubsubPublisher>;
