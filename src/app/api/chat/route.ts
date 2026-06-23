@@ -1,127 +1,26 @@
-import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
-import { randomUUID } from "node:crypto";
 import { connect, rpc } from "@restatedev/restate-sdk-clients";
-import { createPubsubClient } from "@restatedev/pubsub-client";
 import { manager } from "@/restate/objects/manager";
-import { WireEvent } from "@/core/delivery";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
 
 const INGRESS = process.env.RESTATE_INGRESS_URL ?? "http://localhost:8080";
-const DEADLINE_MS = (maxDuration - 5) * 1000;
 
 export async function POST(req: Request): Promise<Response> {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const body = (await req.json()) as Record<string, any>;
-    const sessionId: string = body.sessionId ?? body.id ?? "";
-    const messages: Array<{ role: string; id: string; parts?: Array<{ type: string; text?: string; url?: string; mediaType?: string }> }> =
-      body.messages ?? [];
+  const body = (await req.json()) as { sessionId?: string; message?: string; messageId?: string };
+  const { sessionId, message, messageId } = body;
 
-    const lastUser = [...messages].reverse().find((m) => m.role === "user");
-    const text =
-      lastUser?.parts?.find((p) => p.type === "text")?.text?.trim() ?? "";
-    const files = (lastUser?.parts ?? [])
-      .filter((p) => p.type === "file" && p.url && p.mediaType)
-      .map((p) => ({ mediaType: p.mediaType!, url: p.url! }));
-
-    if (!text && files.length === 0) {
-      return new Response("sessionId and a non-empty user message are required", {
-        status: 400,
-      });
-    }
-    if (!sessionId) {
-      return new Response("sessionId is required", { status: 400 });
-    }
-
-    const ingress = connect({ url: INGRESS });
-    const pubsubClient = createPubsubClient(ingress, { name: "pubsub" });
-
-    const idempotencyKey = lastUser?.id
-      ? `${sessionId}-${lastUser.id}`
-      : `${sessionId}-${randomUUID()}`;
-    const turnTopic = idempotencyKey;
-
-    await ingress.objectSendClient(manager, sessionId).chat(
-      { message: text, files: files.length > 0 ? files : undefined, replyTo: { channel: "web", address: turnTopic } },
-      rpc.sendOpts({ idempotencyKey }),
-    );
-
-    const ac = new AbortController();
-    const deadline = setTimeout(() => ac.abort(), DEADLINE_MS);
-
-    const textId = randomUUID();
-    const reasoningId = randomUUID();
-
-    const stream = createUIMessageStream({
-      execute: async ({ writer }) => {
-        writer.write({ type: "start" });
-        writer.write({ type: "start-step" });
-
-        let responseText: string | null = null;
-        let reasoningText: string | null = null;
-
-        try {
-          for await (const msg of pubsubClient.pull({ topic: turnTopic, offset: 0, signal: ac.signal })) {
-            const event = msg as WireEvent;
-
-            if (event.kind === "tool-input") {
-              writer.write({
-                type: "tool-input-available",
-                toolCallId: event.toolCallId,
-                toolName: event.toolName,
-                input: event.input,
-              });
-            } else if (event.kind === "tool-output") {
-              writer.write({
-                type: "tool-output-available",
-                toolCallId: event.toolCallId,
-                output: event.output,
-              });
-            } else if (event.kind === "tool-error") {
-              writer.write({
-                type: "tool-output-error",
-                toolCallId: event.toolCallId,
-                errorText: event.errorText,
-              });
-            } else if (event.kind === "reasoning") {
-              reasoningText = event.text;
-            } else if (event.kind === "text") {
-              responseText = event.text;
-            } else if (event.kind === "done") {
-              break;
-            }
-          }
-        } catch (err) {
-          if (!(err instanceof Error && err.name === "AbortError")) throw err;
-          responseText = "(Agent timeout — try again or check Restate logs.)";
-        } finally {
-          clearTimeout(deadline);
-          ac.abort();
-        }
-
-        if (reasoningText !== null) {
-          writer.write({ type: "reasoning-start", id: reasoningId });
-          writer.write({ type: "reasoning-delta", id: reasoningId, delta: reasoningText });
-          writer.write({ type: "reasoning-end", id: reasoningId });
-        }
-        if (responseText !== null) {
-          writer.write({ type: "text-start", id: textId });
-          writer.write({ type: "text-delta", id: textId, delta: responseText });
-          writer.write({ type: "text-end", id: textId });
-        }
-        writer.write({ type: "finish-step" });
-        writer.write({ type: "finish", finishReason: "stop" });
-      },
-    });
-
-    return createUIMessageStreamResponse({ stream });
-  } catch (err) {
-    console.error("[api/chat] unhandled error:", err);
-    return new Response(
-      err instanceof Error ? err.message : String(err),
-      { status: 500 }
-    );
+  if (!sessionId || !message?.trim()) {
+    return new Response("sessionId and message are required", { status: 400 });
   }
+
+  const idempotencyKey = messageId ? `${sessionId}-${messageId}` : `${sessionId}-${crypto.randomUUID()}`;
+  const topic = idempotencyKey;
+
+  const ingress = connect({ url: INGRESS });
+  await ingress.objectSendClient(manager, sessionId).chat(
+    { message: message.trim(), replyTo: { channel: "web", address: topic } },
+    rpc.sendOpts({ idempotencyKey }),
+  );
+
+  return Response.json({ topic });
 }

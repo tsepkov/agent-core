@@ -35,7 +35,7 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { useChat } from "@ai-sdk/react";
+import { usePubsubChat } from "@/hooks/usePubsubChat";
 import { readMessages, writeMessages } from "@/lib/sessions";
 import type { UIMessage, DynamicToolUIPart } from "ai";
 
@@ -61,16 +61,13 @@ export function Chat({ sessionId }: { sessionId: string }) {
   const [elapsedS, setElapsedS] = useState(0);
   const sendTimeRef = useRef<number | null>(null);
 
-  const { messages, sendMessage, status } = useChat({
-    id: sessionId,
-    messages: initialMessages,
-  });
+  const { messages, sendMessage, status } = usePubsubChat({ sessionId, initialMessages });
 
   useEffect(() => {
     writeMessages(sessionId, messages);
   }, [sessionId, messages]);
 
-  const isActive = status === "submitted" || status === "streaming";
+  const isActive = status === "submitted";
 
   // live counter while waiting
   useEffect(() => {
@@ -98,7 +95,7 @@ export function Chat({ sessionId }: { sessionId: string }) {
       const text = msg.text?.trim();
       if (!text && msg.files.length === 0) return;
       sendTimeRef.current = Date.now();
-      sendMessage({ text: text ?? "", files: msg.files }, { body: { sessionId } });
+      sendMessage({ text: text ?? "" });
     },
     [sendMessage, sessionId]
   );
@@ -212,7 +209,7 @@ export function Chat({ sessionId }: { sessionId: string }) {
             </PromptInputActionMenu>
           </PromptInputTools>
           <PromptInputSubmit
-            status={status === "streaming" || status === "submitted" ? status : "ready"}
+            status={status === "submitted" ? "submitted" : "ready"}
           />
         </PromptInputFooter>
       </PromptInput>
