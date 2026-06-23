@@ -17,8 +17,6 @@
 # Pull the reply (cursor advances as you consume messages):
 #   curl http://localhost:8080/Manager/session-1/pull \
 #     -H 'content-type: application/json' -d '{"cursor":0}'
-#
-# Direct agent h2c endpoint (dev): http://localhost:9080
 
 services:
   # Restate runtime: durable execution, ingress (8080) and admin (9070).
@@ -34,20 +32,14 @@ services:
     volumes:
       - restate-data:/restate-data
 
-  # Development app server: runs both Next.js (web UI, :3000) and the Restate h2c agent
-  # endpoint (:9080) from source. No build step — edits reflect immediately via HMR.
+  # Development app server: Next.js (web UI + Restate endpoint at /restate).
+  # No build step — edits reflect immediately via HMR.
   # node_modules are bind-mounted from the host (installed once with npm install).
-  #
-  # NOTE: Next.js dev server speaks HTTP/1.1. The Restate runtime requires HTTP/2 (h2c) to
-  # connect to service endpoints. We therefore run a separate h2c server on :9080 via
-  # src/restate-server.mjs (uses @restatedev/restate-sdk listen()). The Next.js route handler
-  # at /restate/* is kept for production (Vercel, HTTPS → HTTP/2 via TLS negotiation).
   app:
     image: node:22-slim
     working_dir: /app
     command: >-
-      sh -c "node --experimental-strip-types --inspect=0.0.0.0:9229 src/restate-server.ts &
-      exec node --inspect=0.0.0.0:9229 node_modules/.bin/next dev --turbopack -H 0.0.0.0"
+      node --inspect=0.0.0.0:9229 node_modules/.bin/next dev --turbopack -H 0.0.0.0
     environment:
       NODE_ENV: development
       RESTATE_INGRESS_URL: "http://restate:8080"
@@ -56,12 +48,12 @@ services:
       - ./:/app
     ports:
       - "3000:3000"
-      - "9080:9080"
       - "9229:9229"
+      - "9230:9230"
     depends_on:
       - restate
 
-  # One-shot: wait for the h2c agent server on :9080 to be ready, then register.
+  # One-shot: wait for Next.js /restate endpoint to be ready, then register with HTTP/1.1.
   register:
     image: curlimages/curl:8.10.1
     depends_on:
@@ -72,13 +64,13 @@ services:
       - sh
       - -c
       - |
-        echo "waiting for Restate agent on app:9080 ...";
-        until curl -sf --http2-prior-knowledge http://app:9080/discover \
+        echo "waiting for Next.js Restate endpoint on app:3000 ...";
+        until curl -sf http://app:3000/restate/discover \
           -H 'accept: application/vnd.restate.endpointmanifest.v3+json' > /dev/null 2>&1; do sleep 2; done;
         echo "agent ready — registering deployment with Restate ...";
         until curl -sf -X POST http://restate:9070/deployments \
           -H 'content-type: application/json' \
-          -d '{"uri":"http://app:9080","force":true}'; do sleep 2; done;
+          -d '{"uri":"http://app:3000/restate","use_http_11":true,"force":true}'; do sleep 2; done;
         echo "registered.";
 
 volumes:
