@@ -23,7 +23,7 @@ export interface DeliveryAdapter {
 }
 
 export type WireEvent =
-  | { kind: "text"; delta: string }
+  | { kind: "text"; text: string }
   | { kind: "tool-input"; toolCallId: string; toolName: string }
   | { kind: "tool-output"; toolCallId: string; toolName: string }
   | { kind: "tool-error"; toolCallId: string; toolName: string; errorText: string }
@@ -42,7 +42,8 @@ export function createDeliveryAdapter(overrides: Partial<DeliveryAdapter> = {}):
 }
 
 /**
- * Delivery adapter that publishes replies to Restate pub/sub word-by-word.
+ * Delivery adapter that publishes the complete reply to Restate pub/sub.
+ * Publishes a single `text` event followed by a `done` event.
  */
 export function createWebDeliveryAdapter(pubsubName = "pubsub"): DeliveryAdapter {
   const publish = createPubsubPublisher(pubsubName);
@@ -51,11 +52,7 @@ export function createWebDeliveryAdapter(pubsubName = "pubsub"): DeliveryAdapter
       if (target?.channel !== "web") return;
       const topic = target.address ?? "";
       if (!topic) return;
-      // Split into word-level chunks.
-      const chunks = message.content.match(/\S+\s*/g) ?? [message.content];
-      for (const chunk of chunks) {
-        publish(ctx, topic, { kind: "text", delta: chunk } as WireEvent);
-      }
+      publish(ctx, topic, { kind: "text", text: message.content } as WireEvent);
       publish(ctx, topic, { kind: "done", id: message.id } as WireEvent);
     },
   };

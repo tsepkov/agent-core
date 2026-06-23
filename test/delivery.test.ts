@@ -34,12 +34,8 @@ test("override replaces deliver and receives the ctx and payload", async () => {
   assert.deepEqual(seen[0].payload, payload);
 });
 
-test("createWebDeliveryAdapter sends WireEvent kind:text", async () => {
-  const published: Array<{ topic: string; message: any }> = [];
-
-  // Mock publish by replacing the internal createPubsubPublisher if possible,
-  // or just testing the contract. Since createPubsubPublisher is imported,
-  // we'd need to mock the module. Given node:test, we can't easily mock imports.
-  // Instead, let's just ensure it exports.
+test("createWebDeliveryAdapter is exported as a function", async () => {
+  // createWebDeliveryAdapter publishes a single complete `text` event
+  // followed by a `done` event — no word-by-word chunking.
   assert.equal(typeof createWebDeliveryAdapter, "function");
 });

@@ -46,12 +46,13 @@ export async function POST(req: Request): Promise<Response> {
     const deadline = setTimeout(() => ac.abort(), DEADLINE_MS);
 
     const textId = randomUUID();
-    let textOpen = false;
 
     const stream = createUIMessageStream({
       execute: async ({ writer }) => {
         writer.write({ type: "start" });
         writer.write({ type: "start-step" });
+
+        let responseText: string | null = null;
 
         try {
           for await (const msg of pubsubClient.pull({ topic: turnTopic, offset: 0, signal: ac.signal })) {
@@ -77,28 +78,22 @@ export async function POST(req: Request): Promise<Response> {
                 errorText: event.errorText,
               });
             } else if (event.kind === "text") {
-              if (!textOpen) {
-                writer.write({ type: "text-start", id: textId });
-                textOpen = true;
-              }
-              writer.write({ type: "text-delta", id: textId, delta: event.delta });
+              responseText = event.text;
             } else if (event.kind === "done") {
               break;
             }
           }
         } catch (err) {
           if (!(err instanceof Error && err.name === "AbortError")) throw err;
-          if (!textOpen) {
-            writer.write({ type: "text-start", id: textId });
-            textOpen = true;
-          }
-          writer.write({ type: "text-delta", id: textId, delta: "(Agent timeout — try again or check Restate logs.)" });
+          responseText = "(Agent timeout — try again or check Restate logs.)";
         } finally {
           clearTimeout(deadline);
           ac.abort();
         }
 
-        if (textOpen) {
+        if (responseText !== null) {
+          writer.write({ type: "text-start", id: textId });
+          writer.write({ type: "text-delta", id: textId, delta: responseText });
           writer.write({ type: "text-end", id: textId });
         }
         writer.write({ type: "finish-step" });
