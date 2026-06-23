@@ -2,8 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { APICallError } from "ai";
 import { TerminalError, RetryableError } from "@restatedev/restate-sdk";
-import { classifyProviderError, parseRetryAfterSeconds } from "../src/core/index.ts";
-import { createAgentHandlers } from "../src/core/index.ts";
+import { classifyProviderError, parseRetryAfterSeconds, AgentObject } from "../src/core/index.ts";
 import type { ObjectContext, ObjectSharedContext } from "@restatedev/restate-sdk";
 
 // ---------------------------------------------------------------------------
@@ -173,18 +172,18 @@ function fakeCtx(overrides: object = {}): ObjectContext {
 }
 
 test("chat: TerminalError from generate → returns messageId without throw", async () => {
-  const handlers = createAgentHandlers({
+  const agent = new AgentObject({
     model: {} as never,
     generate: async () => { throw new TerminalError("upstream error", { errorCode: 500 }); },
   });
 
-  const res = await handlers.chat(fakeCtx(), { message: "hello" });
+  const res = await agent.chat(fakeCtx(), { message: "hello" });
 
   assert.match(res.messageId, /^uuid-/);
 });
 
 test("chat: TerminalError from generate → history not persisted (user can retry cleanly)", async () => {
-  const handlers = createAgentHandlers({
+  const agent = new AgentObject({
     model: {} as never,
     generate: async () => { throw new TerminalError("upstream error"); },
   });
@@ -193,27 +192,27 @@ test("chat: TerminalError from generate → history not persisted (user can retr
   // In real Restate, ctx.get always deserializes a fresh copy, so in-memory mutations never
   // escape without an explicit ctx.set. Here we verify ctx.set("history", ...) was never called.
   const ctx = fakeCtx();
-  await handlers.chat(ctx, { message: "hello" });
+  await agent.chat(ctx, { message: "hello" });
 
   const state = (ctx as unknown as { _state: Map<string, unknown> })._state;
   assert.ok(!state.has("history"), "ctx.set('history', ...) must not be called on terminal error");
 });
 
 test("chat: non-TerminalError from generate is rethrown", async () => {
-  const handlers = createAgentHandlers({
+  const agent = new AgentObject({
     model: {} as never,
     generate: async () => { throw new Error("unexpected crash"); },
   });
 
   await assert.rejects(
-    () => handlers.chat(fakeCtx(), { message: "hello" }),
+    () => agent.chat(fakeCtx(), { message: "hello" }),
     (e: unknown) => e instanceof Error && (e as Error).message === "unexpected crash"
   );
 });
 
 test("chat: TerminalError from generate → delivery adapter receives error message", async () => {
   const delivered: Array<{ message: { content: string } }> = [];
-  const handlers = createAgentHandlers({
+  const agent = new AgentObject({
     model: {} as never,
     generate: async () => { throw new TerminalError("upstream error"); },
     delivery: {
@@ -223,7 +222,7 @@ test("chat: TerminalError from generate → delivery adapter receives error mess
     },
   });
 
-  await handlers.chat(fakeCtx(), { message: "hi", replyTo: { channel: "web", address: "s1" } });
+  await agent.chat(fakeCtx(), { message: "hi", replyTo: { channel: "web", address: "s1" } });
 
   assert.equal(delivered.length, 1);
   assert.ok(

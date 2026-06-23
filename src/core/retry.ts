@@ -1,5 +1,5 @@
 import { APICallError } from "ai";
-import type { LanguageModelV3Middleware } from "ai";
+import type { LanguageModelMiddleware } from "ai";
 import { TerminalError, RetryableError } from "@restatedev/restate-sdk";
 import type { RunOptions } from "@restatedev/restate-sdk";
 
@@ -102,7 +102,7 @@ export const LLM_RETRY_OPTIONS = {
  * Ordering in `wrapLanguageModel` (first = outermost = owns the retry loop):
  *   middleware: [durableCalls(ctx, LLM_RETRY_OPTIONS), errorClassifierMiddleware]
  */
-export const errorClassifierMiddleware: LanguageModelV3Middleware = {
+export const errorClassifierMiddleware: LanguageModelMiddleware = {
   specificationVersion: "v3",
   wrapGenerate: async ({ doGenerate }) => {
     try {

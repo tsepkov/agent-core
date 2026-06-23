@@ -2,7 +2,8 @@ import { createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { randomUUID } from "node:crypto";
 import { connect, rpc } from "@restatedev/restate-sdk-clients";
 import { createPubsubClient } from "@restatedev/pubsub-client";
-import { manager } from "@/agents/manager";
+import { manager } from "@/restate/objects/manager";
+import type { AgentHandlers } from "@/core/agent";
 import { WireEvent } from "@/core/delivery";
 
 export const runtime = "nodejs";
@@ -37,7 +38,7 @@ export async function POST(req: Request): Promise<Response> {
       : `${sessionId}-${randomUUID()}`;
     const turnTopic = idempotencyKey;
 
-    await ingress.objectSendClient(manager, sessionId).chat(
+    await ingress.objectSendClient<AgentHandlers>(manager, sessionId).chat(
       { message: text, replyTo: { channel: "web", address: turnTopic } },
       rpc.sendOpts({ idempotencyKey }),
     );

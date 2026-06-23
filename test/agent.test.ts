@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAgentHandlers } from "../src/core/index.ts";
+import { AgentObject } from "../src/core/index.ts";
 import type { ObjectContext } from "@restatedev/restate-sdk";
 import type { ModelMessage, ToolSet } from "ai";
 import type { AgentTool } from "../src/core/index.ts";
@@ -38,10 +38,10 @@ function stubGenerate(text: StubText = "hello there", messages?: ModelMessage[])
 }
 
 test("chat returns a messageId and persists history", async () => {
-  const handlers = createAgentHandlers({ model: {} as never, generate: stubGenerate("hello there") });
+  const agent = new AgentObject({ model: {} as never, generate: stubGenerate("hello there") });
 
   const ctx = fakeCtx();
-  const res = await handlers.chat(ctx, { message: "hi" });
+  const res = await agent.chat(ctx, { message: "hi" });
 
   assert.match(res.messageId, /^uuid-/);
   assert.equal((res as Record<string, unknown>).text, undefined, "chat is detached: no synchronous text payload");
@@ -54,13 +54,13 @@ test("chat returns a messageId and persists history", async () => {
 
 test("chat pushes the reply through the delivery adapter", async () => {
   const delivered: Array<{ target?: unknown; message: unknown }> = [];
-  const handlers = createAgentHandlers({
+  const agent = new AgentObject({
     model: {} as never,
     generate: stubGenerate("done"),
-    delivery: { deliver: async (_ctx, payload) => { delivered.push(payload); } },
+    delivery: { deliver: async (_ctx: unknown, payload: unknown) => { delivered.push(payload as never); } },
   });
 
-  await handlers.chat(fakeCtx(), { message: "go", replyTo: { channel: "web", address: "session-1" } });
+  await agent.chat(fakeCtx(), { message: "go", replyTo: { channel: "web", address: "session-1" } });
 
   assert.equal(delivered.length, 1);
   assert.deepEqual(delivered[0].target, { channel: "web", address: "session-1" });
@@ -68,14 +68,14 @@ test("chat pushes the reply through the delivery adapter", async () => {
 });
 
 test("chat accumulates history across turns", async () => {
-  const handlers = createAgentHandlers({
+  const agent = new AgentObject({
     model: {} as never,
     generate: stubGenerate(({ messages }) => `turn-${messages.filter((m) => m.role === "user").length}`),
   });
 
   const ctx = fakeCtx();
-  await handlers.chat(ctx, { message: "first" });
-  await handlers.chat(ctx, { message: "second" });
+  await agent.chat(ctx, { message: "first" });
+  await agent.chat(ctx, { message: "second" });
 
   const state = (ctx as unknown as { _state: Map<string, unknown> })._state;
   const userTurns = (state.get("history") as ModelMessage[]).filter((m) => m.role === "user");
@@ -90,7 +90,7 @@ test("chat binds tools to the context and passes them to generate", async () => 
     build: (ctx: ObjectContext) => ({ description: "echo", ctxKey: ctx.key, execute: async () => "x" }),
   } as unknown as AgentTool;
 
-  const handlers = createAgentHandlers({
+  const agent = new AgentObject({
     model: {} as never,
     tools: [echoTool],
     generate: async ({ tools }: GenerateInput): Promise<GenerateOutput> => {
@@ -99,7 +99,7 @@ test("chat binds tools to the context and passes them to generate", async () => 
     },
   });
 
-  await handlers.chat(fakeCtx(), { message: "go" });
+  await agent.chat(fakeCtx(), { message: "go" });
   assert.ok(passedTools!.echo, "tool should be built and passed under its name");
   assert.equal(
     (passedTools!.echo as unknown as { ctxKey: string }).ctxKey,
@@ -109,12 +109,12 @@ test("chat binds tools to the context and passes them to generate", async () => 
 });
 
 test("reset clears history", async () => {
-  const handlers = createAgentHandlers({ model: {} as never, generate: stubGenerate() });
+  const agent = new AgentObject({ model: {} as never, generate: stubGenerate() });
   const ctx = fakeCtx();
   const state = (ctx as unknown as { _state: Map<string, unknown> })._state;
   state.set("history", [{ role: "user", content: "x" }]);
 
-  const res = await handlers.reset(ctx);
+  const res = await agent.reset(ctx);
 
   assert.deepEqual(res, { ok: true });
   assert.equal(state.has("history"), false);

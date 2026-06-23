@@ -1,5 +1,5 @@
 import { endpoint } from "@restatedev/restate-sdk/fetch";
-import { manager } from "@/agents/manager";
+import { manager } from "@/restate/objects/manager";
 import { createPubsubObject } from "@restatedev/pubsub";
 
 export const runtime = "nodejs";
