@@ -1,15 +1,21 @@
 import { z } from "zod";
-import { defineTool } from "../../core/tool.ts";
+import { AgentTool } from "../../core/tool.ts";
+import type { ObjectContext } from "@restatedev/restate-sdk";
 
-export const getDatetimeTool = defineTool({
-  name: "get_datetime",
-  description: "Get the current date and time in ISO 8601 format.",
-  inputSchema: z.object({}),
-  execute: async ({ ctx }) => {
-    const timestamp = await ctx.date.now();
-    return new Date(timestamp).toISOString();
-  },
+const inputSchema = z.object({});
+
+class GetDatetimeTool extends AgentTool<typeof inputSchema> {
+  readonly name = "get_datetime";
+  readonly description = "Get the current date and time in ISO 8601 format.";
+  readonly inputSchema = inputSchema;
   // ctx.date.now() is already a durable Restate journal entry — wrapping it in
   // ctx.run() would create a nested Restate call, which causes journal replay mismatches.
-  durable: false,
-});
+  readonly durable = false;
+
+  async execute({ ctx }: { ctx: ObjectContext; input: z.infer<typeof inputSchema> }): Promise<unknown> {
+    const timestamp = await ctx.date.now();
+    return new Date(timestamp).toISOString();
+  }
+}
+
+export const getDatetimeTool = new GetDatetimeTool();

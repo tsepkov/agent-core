@@ -6,7 +6,8 @@
  */
 import { XMLParser } from "fast-xml-parser";
 import { z } from "zod";
-import { defineTool } from "../../core/tool.ts";
+import { AgentTool } from "../../core/tool.ts";
+import type { ObjectContext } from "@restatedev/restate-sdk";
 
 /** Yandex Search API credentials (required only when the web_search tool is used). */
 export function getYandexConfig(): { apiKey: string; folderId: string } {
@@ -149,13 +150,18 @@ const inputSchema = z.object({
     .describe("0-based result page number (default: 0)"),
 });
 
-export const webSearchTool = defineTool({
-  name: "web_search",
-  description:
-    "Search the Russian web index (Yandex). Returns top documents with title, URL and text snippets. Use for current events, Russian-language content, or any factual look-up.",
-  inputSchema,
-  outputSchema: SearchResultSchema,
-  execute: async ({ input }) => searchWeb(input),
+class WebSearchTool extends AgentTool<typeof inputSchema> {
+  readonly name = "web_search";
+  readonly description =
+    "Search the Russian web index (Yandex). Returns top documents with title, URL and text snippets. Use for current events, Russian-language content, or any factual look-up.";
+  readonly inputSchema = inputSchema;
+  readonly outputSchema = SearchResultSchema;
   // durable: true (default) — the HTTP call runs inside a checkpointed ctx.run step.
   // mutating: false — read-only, no idempotency key needed.
-});
+
+  async execute({ input }: { ctx: ObjectContext; input: z.infer<typeof inputSchema> }): Promise<unknown> {
+    return searchWeb(input);
+  }
+}
+
+export const webSearchTool = new WebSearchTool();
