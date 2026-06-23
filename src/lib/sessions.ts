@@ -19,8 +19,22 @@ export interface Session {
 
 const SESSIONS_KEY = "agent.sessions";
 const ACTIVE_KEY = "agent.activeSession";
+const USER_ID_KEY = "agent.userId";
 const messagesKey = (id: string) => `agent.messages.${id}`;
 const durationsKey = (id: string) => `agent.durations.${id}`;
+
+/**
+ * Returns a stable, cross-session user ID stored in localStorage.
+ * This is used to scope long-term memory in Mem0 across multiple chat sessions.
+ */
+export function getOrCreateUserId(): string {
+  let id = localStorage.getItem(USER_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(USER_ID_KEY, id);
+  }
+  return id;
+}
 
 function readSessions(): Session[] {
   try {

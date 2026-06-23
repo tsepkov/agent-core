@@ -9,6 +9,7 @@ import { NoopDeliveryAdapter } from "./delivery/index.ts";
 import type { AgentTool } from "./tool/index.ts";
 import type { DeliveryAdapter, DeliveryTarget, OutboxMessage, WireEvent } from "./delivery/index.ts";
 import { errorClassifierMiddleware, LLM_RETRY_OPTIONS } from "./retry.ts";
+import { createMemoryAdapter, MemoryAdapter } from "./memory.ts";
 
 export interface ChatFilePart {
   mediaType: string;
@@ -19,6 +20,8 @@ export interface ChatRequest {
   message?: string;
   files?: ChatFilePart[];
   replyTo?: DeliveryTarget;
+  /** Stable user identifier for long-term memory scoping. Falls back to sessionId if omitted. */
+  userId?: string;
 }
 
 /** Public handler surface exposed to Restate and typed ingress clients. */
@@ -49,6 +52,7 @@ export interface AgentObjectConfig {
   model: LanguageModelV3;
   maxSteps?: number;
   delivery?: DeliveryAdapter;
+  memory?: MemoryAdapter;
 }
 
 /** Structural contract restate.object() reads from its config argument. */
@@ -67,6 +71,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
   protected readonly model: LanguageModelV3;
   protected readonly maxSteps: number;
   protected readonly delivery: DeliveryAdapter;
+  protected readonly memory: MemoryAdapter;
 
   protected constructor(config: AgentObjectConfig) {
     this.systemPrompt = config.systemPrompt ?? "";
@@ -74,6 +79,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
     this.model = config.model;
     this.maxSteps = config.maxSteps ?? 20;
     this.delivery = config.delivery ?? new NoopDeliveryAdapter();
+    this.memory = config.memory ?? createMemoryAdapter();
   }
 
   // Restate does Object.entries(config.handlers) — getter returns only bound methods, not the full instance.
@@ -84,6 +90,8 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
   async chat(ctx: ObjectContext, req: ChatRequest): Promise<{ messageId: string }> {
     const message = req?.message ?? "";
     const replyTo = req?.replyTo;
+    // userId scopes long-term memory across sessions; falls back to Virtual Object key (sessionId).
+    const userId = req?.userId ?? ctx.key;
     const history: ModelMessage[] = (await ctx.get<ModelMessage[]>("history")) ?? [];
 
     const fileParts = (req?.files ?? []).map((f) => {
@@ -94,6 +102,18 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
       ? [{ type: "text" as const, text: message }, ...fileParts]
       : message;
     history.push({ role: "user", content: userContent });
+
+    // Recall relevant long-term memories and inject them ephemerally (not stored in history).
+    const memories = await this.memory.recall(ctx, userId, message);
+    const messagesWithMemory: ModelMessage[] = memories.length > 0
+      ? [
+          {
+            role: "system",
+            content: `Relevant memories about this user:\n${memories.map((m, i) => `${i + 1}. ${m}`).join("\n")}`,
+          },
+          ...history,
+        ]
+      : history;
 
     const topic = replyTo?.channel === "web" ? (replyTo.address ?? "") : "";
     const publish = topic ? createPubsubPublisher("pubsub") : null;
@@ -107,7 +127,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
         ctx,
         model: this.model,
         system: this.systemPrompt,
-        messages: history,
+        messages: messagesWithMemory,
         tools: Object.fromEntries(this.tools.map((t) => [t.name, t.build(ctx)])) as ToolSet,
         maxSteps: this.maxSteps,
         emitToolEvent,
@@ -118,6 +138,12 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
       history.push(...response.messages);
       ctx.set("history", history);
       replyContent = text;
+
+      // Persist the exchange to long-term memory; Mem0 decides what's worth keeping.
+      await this.memory.remember(ctx, userId, [
+        { role: "user", content: message },
+        { role: "assistant", content: text },
+      ]);
     } catch (err) {
       if (!(err instanceof restate.TerminalError)) throw err;
       replyContent = "The model is temporarily unavailable (rate-limit or upstream error). Please try again.";

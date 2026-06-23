@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPubsubClient } from "@restatedev/pubsub-client";
 import type { UIMessage, DynamicToolUIPart } from "ai";
 import type { WireEvent } from "@/core/delivery";
+import { getOrCreateUserId } from "@/lib/sessions";
 
 const INGRESS = process.env.NEXT_PUBLIC_RESTATE_INGRESS_URL ?? "http://localhost:8080";
 
@@ -41,10 +42,11 @@ export function usePubsubChat({
 
       let topic: string;
       try {
+        const userId = getOrCreateUserId();
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId, message: text, messageId }),
+          body: JSON.stringify({ sessionId, message: text, messageId, userId }),
           signal: ac.signal,
         });
         if (!res.ok) throw new Error(await res.text());
