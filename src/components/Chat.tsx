@@ -11,7 +11,7 @@ import {
   MessageContent,
   MessageResponse,
 } from "@/components/ai-elements/message";
-import { Tool, ToolHeader } from "@/components/ai-elements/tool";
+import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import {
   PromptInput,
   PromptInputBody,
@@ -23,7 +23,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { readMessages, writeMessages } from "@/lib/sessions";
-import type { UIMessage, ToolUIPart } from "ai";
+import type { UIMessage, DynamicToolUIPart } from "ai";
 
 export function Chat({ sessionId }: { sessionId: string }) {
   const [initialMessages] = useState<UIMessage[]>(() => readMessages(sessionId));
@@ -70,10 +70,20 @@ export function Chat({ sessionId }: { sessionId: string }) {
                       );
                     }
                     if (part.type.startsWith("tool-") || part.type === "dynamic-tool") {
-                      const p = part as ToolUIPart;
+                      const p = part as DynamicToolUIPart;
+                      const hasOutput = p.state === "output-available" || p.state === "output-error";
                       return (
-                        <Tool key={`${message.id}-${i}`}>
-                          <ToolHeader type={p.type} state={p.state} />
+                        <Tool key={`${message.id}-${i}`} defaultOpen={!hasOutput}>
+                          <ToolHeader type={p.type} state={p.state} toolName={p.toolName} />
+                          <ToolContent>
+                            <ToolInput input={p.input} />
+                            {hasOutput && (
+                              <ToolOutput
+                                output={p.state === "output-available" ? p.output : undefined}
+                                errorText={p.state === "output-error" ? p.errorText : undefined}
+                              />
+                            )}
+                          </ToolContent>
                         </Tool>
                       );
                     }
