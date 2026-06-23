@@ -9,4 +9,7 @@ export const getDatetimeTool = defineTool({
     const timestamp = await ctx.date.now();
     return new Date(timestamp).toISOString();
   },
+  // ctx.date.now() is already a durable Restate journal entry — wrapping it in
+  // ctx.run() would create a nested Restate call, which causes journal replay mismatches.
+  durable: false,
 });
