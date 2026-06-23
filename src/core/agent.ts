@@ -4,9 +4,9 @@ import { generateText, stepCountIs, wrapLanguageModel } from "ai";
 import type { ModelMessage, ToolSet } from "ai";
 import type { LanguageModelV3 } from "@ai-sdk/provider";
 import { durableCalls } from "@restatedev/vercel-ai-middleware";
-import { createDeliveryAdapter } from "./delivery.ts";
+import { NoopDeliveryAdapter } from "./delivery/index.ts";
 import type { AgentTool } from "./tool.ts";
-import type { DeliveryAdapter, DeliveryTarget, OutboxMessage } from "./delivery.ts";
+import type { DeliveryAdapter, DeliveryTarget, OutboxMessage } from "./delivery/index.ts";
 import { errorClassifierMiddleware, LLM_RETRY_OPTIONS } from "./retry.ts";
 
 export interface ChatRequest {
@@ -64,7 +64,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
     this.tools = config.tools ?? [];
     this.model = config.model;
     this.maxSteps = config.maxSteps ?? 20;
-    this.delivery = config.delivery ?? createDeliveryAdapter();
+    this.delivery = config.delivery ?? new NoopDeliveryAdapter();
   }
 
   // Restate does Object.entries(config.handlers) — getter returns only bound methods, not the full instance.

@@ -1,6 +1,6 @@
 import * as restate from "@restatedev/restate-sdk";
 import { AgentObject } from "@/core/agent";
-import { createWebDeliveryAdapter } from "@/core/delivery";
+import { WebDeliveryAdapter } from "@/core/delivery";
 import { getModel } from "@/core/llm";
 import { createToolSignalHooksProvider } from "@/core/hooks";
 import { webSearchTool } from "@/tools/web-search/index";
@@ -16,7 +16,7 @@ class ManagerObject extends AgentObject {
       systemPrompt: "You are a helpful manager agent. Answer the user clearly and concisely.",
       tools,
       model: getModel(),
-      delivery: createWebDeliveryAdapter(),
+      delivery: new WebDeliveryAdapter(),
     });
   }
 

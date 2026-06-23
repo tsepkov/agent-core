@@ -1,6 +1,6 @@
 import type { HooksProvider } from "@restatedev/restate-sdk";
 import { createPubsubClient } from "@restatedev/pubsub-client";
-import type { WireEvent } from "./delivery.ts";
+import type { WireEvent } from "./delivery/index.ts";
 
 export interface ToolSignalHooksOptions {
   pubsubName: string;
