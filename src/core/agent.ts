@@ -59,27 +59,27 @@ export interface AgentObjectConfig {
 
 /**
  * Base class for Restate Virtual Object agents.
- * All config is passed via constructor so private fields stay out of the handler type,
- * keeping `keyof AgentObject` = { chat, reset } — exactly what Restate expects.
+ * Uses JS native private fields (`#`) so Restate's handler discovery skips them —
+ * only `chat` and `reset` are enumerable on the instance.
  */
 export class AgentObject {
-  private readonly _systemPrompt: string;
-  private readonly _tools: AgentTool[];
-  private readonly _model: LanguageModelV3;
-  private readonly _maxSteps: number;
-  private readonly _delivery: DeliveryAdapter;
-  private readonly _generate: (input: GenerateInput) => Promise<GenerateOutput>;
+  readonly #systemPrompt: string;
+  readonly #tools: AgentTool[];
+  readonly #model: LanguageModelV3;
+  readonly #maxSteps: number;
+  readonly #delivery: DeliveryAdapter;
+  readonly #generate: (input: GenerateInput) => Promise<GenerateOutput>;
 
   constructor(config: AgentObjectConfig) {
-    this._systemPrompt = config.systemPrompt ?? "";
-    this._tools = config.tools ?? [];
-    this._model = config.model;
-    this._maxSteps = config.maxSteps ?? 5;
-    this._delivery = config.delivery ?? createDeliveryAdapter();
-    this._generate = config.generate ?? durableGenerate;
+    this.#systemPrompt = config.systemPrompt ?? "";
+    this.#tools = config.tools ?? [];
+    this.#model = config.model;
+    this.#maxSteps = config.maxSteps ?? 5;
+    this.#delivery = config.delivery ?? createDeliveryAdapter();
+    this.#generate = config.generate ?? durableGenerate;
   }
 
-  async chat(ctx: ObjectContext, req: ChatRequest): Promise<{ messageId: string }> {
+  chat = async (ctx: ObjectContext, req: ChatRequest): Promise<{ messageId: string }> => {
     const message = req?.message ?? "";
     const replyTo = req?.replyTo;
     const history: ModelMessage[] = (await ctx.get<ModelMessage[]>("history")) ?? [];
@@ -87,13 +87,13 @@ export class AgentObject {
 
     let replyContent = "";
     try {
-      const { text, response } = await this._generate({
+      const { text, response } = await this.#generate({
         ctx,
-        model: this._model,
-        system: this._systemPrompt,
+        model: this.#model,
+        system: this.#systemPrompt,
         messages: history,
-        tools: Object.fromEntries(this._tools.map((t) => [t.name, t.build(ctx)])) as ToolSet,
-        maxSteps: this._maxSteps,
+        tools: Object.fromEntries(this.#tools.map((t) => [t.name, t.build(ctx)])) as ToolSet,
+        maxSteps: this.#maxSteps,
       });
       history.push(...response.messages);
       ctx.set("history", history);
@@ -110,12 +110,12 @@ export class AgentObject {
       ts: await ctx.date.now(),
     };
 
-    await this._delivery.deliver(ctx, { target: replyTo, message: reply });
+    await this.#delivery.deliver(ctx, { target: replyTo, message: reply });
     return { messageId: reply.id };
   }
 
-  async reset(ctx: ObjectContext): Promise<{ ok: boolean }> {
+  reset = async (ctx: ObjectContext): Promise<{ ok: boolean }> => {
     ctx.clear("history");
     return { ok: true };
-  }
+  };
 }
