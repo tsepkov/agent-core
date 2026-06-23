@@ -33,6 +33,7 @@ export interface GenerateInput {
 
 export interface GenerateOutput {
   text: string;
+  reasoningText?: string;
   response: { messages: ModelMessage[] };
 }
 
@@ -88,7 +89,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
 
     let replyContent = "";
     try {
-      const { text, response } = await this.durableGenerate({
+      const { text, reasoningText, response } = await this.durableGenerate({
         ctx,
         model: this.model,
         system: this.systemPrompt,
@@ -97,6 +98,9 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
         maxSteps: this.maxSteps,
         emitToolEvent,
       });
+      if (reasoningText && emitToolEvent) {
+        emitToolEvent({ kind: "reasoning", text: reasoningText });
+      }
       history.push(...response.messages);
       ctx.set("history", history);
       replyContent = text;

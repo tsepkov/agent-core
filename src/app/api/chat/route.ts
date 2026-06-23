@@ -46,6 +46,7 @@ export async function POST(req: Request): Promise<Response> {
     const deadline = setTimeout(() => ac.abort(), DEADLINE_MS);
 
     const textId = randomUUID();
+    const reasoningId = randomUUID();
 
     const stream = createUIMessageStream({
       execute: async ({ writer }) => {
@@ -53,6 +54,7 @@ export async function POST(req: Request): Promise<Response> {
         writer.write({ type: "start-step" });
 
         let responseText: string | null = null;
+        let reasoningText: string | null = null;
 
         try {
           for await (const msg of pubsubClient.pull({ topic: turnTopic, offset: 0, signal: ac.signal })) {
@@ -77,6 +79,8 @@ export async function POST(req: Request): Promise<Response> {
                 toolCallId: event.toolCallId,
                 errorText: event.errorText,
               });
+            } else if (event.kind === "reasoning") {
+              reasoningText = event.text;
             } else if (event.kind === "text") {
               responseText = event.text;
             } else if (event.kind === "done") {
@@ -91,6 +95,11 @@ export async function POST(req: Request): Promise<Response> {
           ac.abort();
         }
 
+        if (reasoningText !== null) {
+          writer.write({ type: "reasoning-start", id: reasoningId });
+          writer.write({ type: "reasoning-delta", id: reasoningId, delta: reasoningText });
+          writer.write({ type: "reasoning-end", id: reasoningId });
+        }
         if (responseText !== null) {
           writer.write({ type: "text-start", id: textId });
           writer.write({ type: "text-delta", id: textId, delta: responseText });

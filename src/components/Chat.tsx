@@ -20,13 +20,18 @@ import {
   PromptInputTextarea,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
-import { useCallback, useEffect, useState } from "react";
+import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useChat } from "@ai-sdk/react";
 import { readMessages, writeMessages } from "@/lib/sessions";
 import type { UIMessage, DynamicToolUIPart } from "ai";
 
 export function Chat({ sessionId }: { sessionId: string }) {
   const [initialMessages] = useState<UIMessage[]>(() => readMessages(sessionId));
+  // duration in seconds, keyed by assistant message id
+  const [durations, setDurations] = useState<Record<string, number>>({});
+  const [elapsedS, setElapsedS] = useState(0);
+  const sendTimeRef = useRef<number | null>(null);
 
   const { messages, sendMessage, status } = useChat({
     id: sessionId,
@@ -37,13 +42,45 @@ export function Chat({ sessionId }: { sessionId: string }) {
     writeMessages(sessionId, messages);
   }, [sessionId, messages]);
 
+  const isActive = status === "submitted" || status === "streaming";
+
+  // live counter while waiting
+  useEffect(() => {
+    if (!isActive || sendTimeRef.current === null) return;
+    setElapsedS(0);
+    const id = setInterval(() => {
+      setElapsedS(Math.floor((Date.now() - sendTimeRef.current!) / 1000));
+    }, 500);
+    return () => clearInterval(id);
+  }, [isActive]);
+
+  useEffect(() => {
+    if (status === "ready" && sendTimeRef.current != null) {
+      const durationS = Math.ceil((Date.now() - sendTimeRef.current) / 1000);
+      sendTimeRef.current = null;
+      const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+      if (lastAssistant) {
+        setDurations((prev) => ({ ...prev, [lastAssistant.id]: durationS }));
+      }
+    }
+  }, [status, messages]);
+
   const handleSubmit = useCallback(
     (msg: PromptInputMessage) => {
       const text = msg.text?.trim();
       if (!text) return;
+      sendTimeRef.current = Date.now();
       sendMessage({ text }, { body: { sessionId } });
     },
     [sendMessage, sessionId]
+  );
+
+  const thinkingMessage = useCallback(
+    (_isStreaming: boolean, duration?: number): ReactNode => {
+      if (duration !== undefined) return <p>Thought for {duration} seconds</p>;
+      return <p>Thinking... {elapsedS > 0 ? `${elapsedS}s` : ""}</p>;
+    },
+    [elapsedS]
   );
 
   const visible = messages.filter((m) => m.role === "user" || m.role === "assistant");
@@ -61,7 +98,26 @@ export function Chat({ sessionId }: { sessionId: string }) {
             visible.map((message) => (
               <Message from={message.role} key={message.id}>
                 <MessageContent>
+                  {message.role === "assistant" && (() => {
+                    const isLast = message.id === visible[visible.length - 1]?.id;
+                    const isStreaming = isLast && isActive;
+                    const reasoningPart = message.parts.find((p) => p.type === "reasoning");
+                    return (
+                      <Reasoning
+                        key={`${message.id}-reasoning`}
+                        defaultOpen={false}
+                        isStreaming={isStreaming}
+                        duration={isStreaming ? undefined : durations[message.id]}
+                      >
+                        <ReasoningTrigger getThinkingMessage={thinkingMessage} />
+                        {reasoningPart && (
+                          <ReasoningContent>{(reasoningPart as { text: string }).text}</ReasoningContent>
+                        )}
+                      </Reasoning>
+                    );
+                  })()}
                   {message.parts.map((part, i) => {
+                    if (part.type === "reasoning") return null;
                     if (part.type === "text") {
                       return (
                         <MessageResponse key={`${message.id}-${i}`}>
@@ -94,6 +150,11 @@ export function Chat({ sessionId }: { sessionId: string }) {
             ))
           )}
         </ConversationContent>
+        {isActive && visible[visible.length - 1]?.role === "user" && (
+          <Reasoning defaultOpen={false} isStreaming={true} className="px-4">
+            <ReasoningTrigger getThinkingMessage={thinkingMessage} />
+          </Reasoning>
+        )}
         <ConversationScrollButton />
       </Conversation>
 
