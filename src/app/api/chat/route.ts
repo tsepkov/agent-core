@@ -63,13 +63,13 @@ export async function POST(req: Request): Promise<Response> {
                 type: "tool-input-available",
                 toolCallId: event.toolCallId,
                 toolName: event.toolName,
-                input: {},
+                input: event.input,
               });
             } else if (event.kind === "tool-output") {
               writer.write({
                 type: "tool-output-available",
                 toolCallId: event.toolCallId,
-                output: null,
+                output: event.output,
               });
             } else if (event.kind === "tool-error") {
               writer.write({

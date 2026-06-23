@@ -4,9 +4,10 @@ import { generateText, stepCountIs, wrapLanguageModel } from "ai";
 import type { ModelMessage, ToolSet } from "ai";
 import type { LanguageModelV3 } from "@ai-sdk/provider";
 import { durableCalls } from "@restatedev/vercel-ai-middleware";
+import { createPubsubPublisher } from "@restatedev/pubsub";
 import { NoopDeliveryAdapter } from "./delivery/index.ts";
-import type { AgentTool } from "./tool.ts";
-import type { DeliveryAdapter, DeliveryTarget, OutboxMessage } from "./delivery/index.ts";
+import type { AgentTool } from "./tool/index.ts";
+import type { DeliveryAdapter, DeliveryTarget, OutboxMessage, WireEvent } from "./delivery/index.ts";
 import { errorClassifierMiddleware, LLM_RETRY_OPTIONS } from "./retry.ts";
 
 export interface ChatRequest {
@@ -27,6 +28,7 @@ export interface GenerateInput {
   messages: ModelMessage[];
   tools: ToolSet;
   maxSteps: number;
+  emitToolEvent?: (event: WireEvent) => void;
 }
 
 export interface GenerateOutput {
@@ -78,6 +80,12 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
     const history: ModelMessage[] = (await ctx.get<ModelMessage[]>("history")) ?? [];
     history.push({ role: "user", content: message });
 
+    const topic = replyTo?.channel === "web" ? (replyTo.address ?? "") : "";
+    const publish = topic ? createPubsubPublisher("pubsub") : null;
+    const emitToolEvent: ((event: WireEvent) => void) | undefined = publish && topic
+      ? (event) => publish(ctx, topic, event)
+      : undefined;
+
     let replyContent = "";
     try {
       const { text, response } = await this.durableGenerate({
@@ -87,6 +95,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
         messages: history,
         tools: Object.fromEntries(this.tools.map((t) => [t.name, t.build(ctx)])) as ToolSet,
         maxSteps: this.maxSteps,
+        emitToolEvent,
       });
       history.push(...response.messages);
       ctx.set("history", history);
@@ -112,7 +121,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
     return { ok: true };
   }
 
-  protected async durableGenerate({ ctx, model, system, messages, tools, maxSteps }: GenerateInput): Promise<GenerateOutput> {
+  protected async durableGenerate({ ctx, model, system, messages, tools, maxSteps, emitToolEvent }: GenerateInput): Promise<GenerateOutput> {
     const durableModel = wrapLanguageModel({
       model,
       middleware: [durableCalls(ctx, LLM_RETRY_OPTIONS), errorClassifierMiddleware],
@@ -123,6 +132,36 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
       messages,
       tools,
       stopWhen: [stepCountIs(maxSteps)],
+      experimental_onToolCallStart: emitToolEvent
+        ? ({ toolCall }) => {
+            emitToolEvent({
+              kind: "tool-input",
+              toolCallId: toolCall.toolCallId,
+              toolName: toolCall.toolName,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              input: (toolCall as any).input,
+            });
+          }
+        : undefined,
+      experimental_onToolCallFinish: emitToolEvent
+        ? (event) => {
+            if (event.success) {
+              emitToolEvent({
+                kind: "tool-output",
+                toolCallId: event.toolCall.toolCallId,
+                toolName: event.toolCall.toolName,
+                output: event.output,
+              });
+            } else {
+              emitToolEvent({
+                kind: "tool-error",
+                toolCallId: event.toolCall.toolCallId,
+                toolName: event.toolCall.toolName,
+                errorText: String(event.error),
+              });
+            }
+          }
+        : undefined,
     });
   }
 }

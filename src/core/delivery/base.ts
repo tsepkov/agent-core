@@ -19,8 +19,8 @@ export interface DeliveryPayload {
 
 export type WireEvent =
   | { kind: "text"; text: string }
-  | { kind: "tool-input"; toolCallId: string; toolName: string }
-  | { kind: "tool-output"; toolCallId: string; toolName: string }
+  | { kind: "tool-input"; toolCallId: string; toolName: string; input: unknown }
+  | { kind: "tool-output"; toolCallId: string; toolName: string; output: unknown }
   | { kind: "tool-error"; toolCallId: string; toolName: string; errorText: string }
   | { kind: "done"; id: string };
 
