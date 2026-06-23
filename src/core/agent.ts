@@ -1,5 +1,5 @@
 import * as restate from "@restatedev/restate-sdk";
-import type { ObjectContext } from "@restatedev/restate-sdk";
+import type { ObjectContext, ObjectOptions } from "@restatedev/restate-sdk";
 import { generateText, stepCountIs, wrapLanguageModel } from "ai";
 import type { ModelMessage, ToolSet } from "ai";
 import type { LanguageModelV3 } from "@ai-sdk/provider";
@@ -34,52 +34,45 @@ export interface GenerateOutput {
   response: { messages: ModelMessage[] };
 }
 
-async function durableGenerate({ ctx, model, system, messages, tools, maxSteps }: GenerateInput): Promise<GenerateOutput> {
-  const durableModel = wrapLanguageModel({
-    model,
-    middleware: [durableCalls(ctx, LLM_RETRY_OPTIONS), errorClassifierMiddleware],
-  });
-  return generateText({
-    model: durableModel,
-    system,
-    messages,
-    tools,
-    stopWhen: [stepCountIs(maxSteps)],
-  });
-}
-
 export interface AgentObjectConfig {
   systemPrompt?: string;
   tools?: AgentTool[];
   model: LanguageModelV3;
   maxSteps?: number;
   delivery?: DeliveryAdapter;
-  generate?: (input: GenerateInput) => Promise<GenerateOutput>;
 }
 
-/**
- * Base class for Restate Virtual Object agents.
- * Uses JS native private fields (`#`) so Restate's handler discovery skips them —
- * only `chat` and `reset` are enumerable on the instance.
- */
-export class AgentObject {
-  readonly #systemPrompt: string;
-  readonly #tools: AgentTool[];
-  readonly #model: LanguageModelV3;
-  readonly #maxSteps: number;
-  readonly #delivery: DeliveryAdapter;
-  readonly #generate: (input: GenerateInput) => Promise<GenerateOutput>;
+/** Structural contract restate.object() reads from its config argument. */
+interface RestateVirtualObjectConfig {
+  readonly name: string;
+  readonly handlers: AgentHandlers;
+  readonly options?: ObjectOptions;
+}
 
-  constructor(config: AgentObjectConfig) {
-    this.#systemPrompt = config.systemPrompt ?? "";
-    this.#tools = config.tools ?? [];
-    this.#model = config.model;
-    this.#maxSteps = config.maxSteps ?? 5;
-    this.#delivery = config.delivery ?? createDeliveryAdapter();
-    this.#generate = config.generate ?? durableGenerate;
+/** Abstract base class for agent Virtual Objects. */
+export abstract class AgentObject implements RestateVirtualObjectConfig {
+  abstract readonly name: string;
+
+  protected readonly systemPrompt: string;
+  protected readonly tools: AgentTool[];
+  protected readonly model: LanguageModelV3;
+  protected readonly maxSteps: number;
+  protected readonly delivery: DeliveryAdapter;
+
+  protected constructor(config: AgentObjectConfig) {
+    this.systemPrompt = config.systemPrompt ?? "";
+    this.tools = config.tools ?? [];
+    this.model = config.model;
+    this.maxSteps = config.maxSteps ?? 20;
+    this.delivery = config.delivery ?? createDeliveryAdapter();
   }
 
-  chat = async (ctx: ObjectContext, req: ChatRequest): Promise<{ messageId: string }> => {
+  // Restate does Object.entries(config.handlers) — getter returns only bound methods, not the full instance.
+  get handlers(): AgentHandlers {
+    return { chat: this.chat.bind(this), reset: this.reset.bind(this) };
+  }
+
+  async chat(ctx: ObjectContext, req: ChatRequest): Promise<{ messageId: string }> {
     const message = req?.message ?? "";
     const replyTo = req?.replyTo;
     const history: ModelMessage[] = (await ctx.get<ModelMessage[]>("history")) ?? [];
@@ -87,13 +80,13 @@ export class AgentObject {
 
     let replyContent = "";
     try {
-      const { text, response } = await this.#generate({
+      const { text, response } = await this.durableGenerate({
         ctx,
-        model: this.#model,
-        system: this.#systemPrompt,
+        model: this.model,
+        system: this.systemPrompt,
         messages: history,
-        tools: Object.fromEntries(this.#tools.map((t) => [t.name, t.build(ctx)])) as ToolSet,
-        maxSteps: this.#maxSteps,
+        tools: Object.fromEntries(this.tools.map((t) => [t.name, t.build(ctx)])) as ToolSet,
+        maxSteps: this.maxSteps,
       });
       history.push(...response.messages);
       ctx.set("history", history);
@@ -110,12 +103,26 @@ export class AgentObject {
       ts: await ctx.date.now(),
     };
 
-    await this.#delivery.deliver(ctx, { target: replyTo, message: reply });
+    await this.delivery.deliver(ctx, { target: replyTo, message: reply });
     return { messageId: reply.id };
   }
 
-  reset = async (ctx: ObjectContext): Promise<{ ok: boolean }> => {
+  async reset(ctx: ObjectContext): Promise<{ ok: boolean }> {
     ctx.clear("history");
     return { ok: true };
-  };
+  }
+
+  protected async durableGenerate({ ctx, model, system, messages, tools, maxSteps }: GenerateInput): Promise<GenerateOutput> {
+    const durableModel = wrapLanguageModel({
+      model,
+      middleware: [durableCalls(ctx, LLM_RETRY_OPTIONS), errorClassifierMiddleware],
+    });
+    return generateText({
+      model: durableModel,
+      system,
+      messages,
+      tools,
+      stopWhen: [stepCountIs(maxSteps)],
+    });
+  }
 }

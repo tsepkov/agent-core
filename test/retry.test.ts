@@ -3,7 +3,22 @@ import assert from "node:assert/strict";
 import { APICallError } from "ai";
 import { TerminalError, RetryableError } from "@restatedev/restate-sdk";
 import { classifyProviderError, parseRetryAfterSeconds, AgentObject } from "../src/core/index.ts";
+import type { AgentObjectConfig, GenerateInput, GenerateOutput } from "../src/core/index.ts";
 import type { ObjectContext, ObjectSharedContext } from "@restatedev/restate-sdk";
+
+type TestAgentConfig = AgentObjectConfig & { generate?: (input: GenerateInput) => Promise<GenerateOutput> };
+
+class TestAgent extends AgentObject {
+  readonly name = "test";
+  readonly #stub?: (input: GenerateInput) => Promise<GenerateOutput>;
+  constructor({ generate, ...rest }: TestAgentConfig) {
+    super(rest);
+    this.#stub = generate;
+  }
+  protected override durableGenerate(input: GenerateInput) {
+    return this.#stub!(input);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // parseRetryAfterSeconds
@@ -172,7 +187,7 @@ function fakeCtx(overrides: object = {}): ObjectContext {
 }
 
 test("chat: TerminalError from generate → returns messageId without throw", async () => {
-  const agent = new AgentObject({
+  const agent = new TestAgent({
     model: {} as never,
     generate: async () => { throw new TerminalError("upstream error", { errorCode: 500 }); },
   });
@@ -183,7 +198,7 @@ test("chat: TerminalError from generate → returns messageId without throw", as
 });
 
 test("chat: TerminalError from generate → history not persisted (user can retry cleanly)", async () => {
-  const agent = new AgentObject({
+  const agent = new TestAgent({
     model: {} as never,
     generate: async () => { throw new TerminalError("upstream error"); },
   });
@@ -199,7 +214,7 @@ test("chat: TerminalError from generate → history not persisted (user can retr
 });
 
 test("chat: non-TerminalError from generate is rethrown", async () => {
-  const agent = new AgentObject({
+  const agent = new TestAgent({
     model: {} as never,
     generate: async () => { throw new Error("unexpected crash"); },
   });
@@ -212,7 +227,7 @@ test("chat: non-TerminalError from generate is rethrown", async () => {
 
 test("chat: TerminalError from generate → delivery adapter receives error message", async () => {
   const delivered: Array<{ message: { content: string } }> = [];
-  const agent = new AgentObject({
+  const agent = new TestAgent({
     model: {} as never,
     generate: async () => { throw new TerminalError("upstream error"); },
     delivery: {
