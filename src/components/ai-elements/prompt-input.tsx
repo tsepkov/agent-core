@@ -421,37 +421,36 @@ export const PromptInputActionAddAttachments = ({
 }: PromptInputActionAddAttachmentsProps) => {
   const attachments = usePromptInputAttachments();
 
-  const handleSelect = useCallback(
-    (e: Event) => {
-      e.preventDefault();
-      attachments.openFileDialog();
-    },
-    [attachments]
-  );
+  const handleClick = useCallback(() => {
+    // Defer so the dropdown finishes closing before the file dialog opens
+    setTimeout(() => attachments.openFileDialog(), 0);
+  }, [attachments]);
 
   return (
-    <DropdownMenuItem {...props} onSelect={handleSelect}>
+    <DropdownMenuItem {...props} onClick={handleClick}>
       <ImageIcon className="mr-2 size-4" /> {label}
     </DropdownMenuItem>
   );
 };
 
-export type PromptInputActionAddScreenshotProps = ComponentProps<
-  typeof DropdownMenuItem
+export type PromptInputActionAddScreenshotProps = Omit<
+  ComponentProps<typeof DropdownMenuItem>,
+  "onSelect"
 > & {
   label?: string;
+  onClick?: React.MouseEventHandler<HTMLDivElement>;
 };
 
 export const PromptInputActionAddScreenshot = ({
   label = "Take screenshot",
-  onSelect,
+  onClick,
   ...props
 }: PromptInputActionAddScreenshotProps) => {
   const attachments = usePromptInputAttachments();
 
-  const handleSelect = useCallback(
-    async (event: Event) => {
-      onSelect?.(event);
+  const handleClick = useCallback(
+    async (event: React.MouseEvent<HTMLDivElement>) => {
+      onClick?.(event);
       if (event.defaultPrevented) {
         return;
       }
@@ -471,11 +470,11 @@ export const PromptInputActionAddScreenshot = ({
         throw error;
       }
     },
-    [onSelect, attachments]
+    [onClick, attachments]
   );
 
   return (
-    <DropdownMenuItem {...props} onSelect={handleSelect}>
+    <DropdownMenuItem {...props} onClick={handleClick}>
       <Monitor className="mr-2 size-4" />
       {label}
     </DropdownMenuItem>

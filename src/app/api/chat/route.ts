@@ -16,17 +16,23 @@ export async function POST(req: Request): Promise<Response> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const body = (await req.json()) as Record<string, any>;
     const sessionId: string = body.sessionId ?? body.id ?? "";
-    const messages: Array<{ role: string; id: string; parts?: Array<{ type: string; text?: string }> }> =
+    const messages: Array<{ role: string; id: string; parts?: Array<{ type: string; text?: string; url?: string; mediaType?: string }> }> =
       body.messages ?? [];
 
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     const text =
       lastUser?.parts?.find((p) => p.type === "text")?.text?.trim() ?? "";
+    const files = (lastUser?.parts ?? [])
+      .filter((p) => p.type === "file" && p.url && p.mediaType)
+      .map((p) => ({ mediaType: p.mediaType!, url: p.url! }));
 
-    if (!text || !sessionId) {
+    if (!text && files.length === 0) {
       return new Response("sessionId and a non-empty user message are required", {
         status: 400,
       });
+    }
+    if (!sessionId) {
+      return new Response("sessionId is required", { status: 400 });
     }
 
     const ingress = connect({ url: INGRESS });
@@ -38,7 +44,7 @@ export async function POST(req: Request): Promise<Response> {
     const turnTopic = idempotencyKey;
 
     await ingress.objectSendClient(manager, sessionId).chat(
-      { message: text, replyTo: { channel: "web", address: turnTopic } },
+      { message: text, files: files.length > 0 ? files : undefined, replyTo: { channel: "web", address: turnTopic } },
       rpc.sendOpts({ idempotencyKey }),
     );
 

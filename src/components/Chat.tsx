@@ -13,11 +13,24 @@ import {
 } from "@/components/ai-elements/message";
 import { Tool, ToolContent, ToolHeader, ToolInput, ToolOutput } from "@/components/ai-elements/tool";
 import {
+  Attachment,
+  AttachmentPreview,
+  AttachmentRemove,
+  Attachments,
+} from "@/components/ai-elements/attachments";
+import {
   PromptInput,
+  PromptInputActionAddAttachments,
+  PromptInputActionMenu,
+  PromptInputActionMenuContent,
+  PromptInputActionMenuTrigger,
   PromptInputBody,
   PromptInputFooter,
+  PromptInputHeader,
   PromptInputSubmit,
   PromptInputTextarea,
+  PromptInputTools,
+  usePromptInputAttachments,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
@@ -25,6 +38,21 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useChat } from "@ai-sdk/react";
 import { readMessages, writeMessages } from "@/lib/sessions";
 import type { UIMessage, DynamicToolUIPart } from "ai";
+
+const AttachmentPreviews = () => {
+  const attachments = usePromptInputAttachments();
+  if (attachments.files.length === 0) return null;
+  return (
+    <Attachments variant="inline">
+      {attachments.files.map((file) => (
+        <Attachment key={file.id} data={file} onRemove={() => attachments.remove(file.id)}>
+          <AttachmentPreview />
+          <AttachmentRemove />
+        </Attachment>
+      ))}
+    </Attachments>
+  );
+};
 
 export function Chat({ sessionId }: { sessionId: string }) {
   const [initialMessages] = useState<UIMessage[]>(() => readMessages(sessionId));
@@ -68,9 +96,9 @@ export function Chat({ sessionId }: { sessionId: string }) {
   const handleSubmit = useCallback(
     (msg: PromptInputMessage) => {
       const text = msg.text?.trim();
-      if (!text) return;
+      if (!text && msg.files.length === 0) return;
       sendTimeRef.current = Date.now();
-      sendMessage({ text }, { body: { sessionId } });
+      sendMessage({ text: text ?? "", files: msg.files }, { body: { sessionId } });
     },
     [sendMessage, sessionId]
   );
@@ -118,6 +146,15 @@ export function Chat({ sessionId }: { sessionId: string }) {
                   })()}
                   {message.parts.map((part, i) => {
                     if (part.type === "reasoning") return null;
+                    if (part.type === "file") {
+                      return (
+                        <Attachments key={`${message.id}-${i}`} variant="inline">
+                          <Attachment data={{ ...part, id: `${message.id}-${i}` }}>
+                            <AttachmentPreview />
+                          </Attachment>
+                        </Attachments>
+                      );
+                    }
                     if (part.type === "text") {
                       return (
                         <MessageResponse key={`${message.id}-${i}`}>
@@ -158,11 +195,22 @@ export function Chat({ sessionId }: { sessionId: string }) {
         <ConversationScrollButton />
       </Conversation>
 
-      <PromptInput onSubmit={handleSubmit} className="mt-3 shrink-0">
+      <PromptInput onSubmit={handleSubmit} className="mt-3 shrink-0" multiple>
+        <PromptInputHeader>
+          <AttachmentPreviews />
+        </PromptInputHeader>
         <PromptInputBody>
           <PromptInputTextarea placeholder="Напишите сообщение..." />
         </PromptInputBody>
-        <PromptInputFooter className="justify-end">
+        <PromptInputFooter>
+          <PromptInputTools>
+            <PromptInputActionMenu>
+              <PromptInputActionMenuTrigger />
+              <PromptInputActionMenuContent>
+                <PromptInputActionAddAttachments />
+              </PromptInputActionMenuContent>
+            </PromptInputActionMenu>
+          </PromptInputTools>
           <PromptInputSubmit
             status={status === "streaming" || status === "submitted" ? status : "ready"}
           />

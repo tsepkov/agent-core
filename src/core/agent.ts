@@ -10,8 +10,14 @@ import type { AgentTool } from "./tool/index.ts";
 import type { DeliveryAdapter, DeliveryTarget, OutboxMessage, WireEvent } from "./delivery/index.ts";
 import { errorClassifierMiddleware, LLM_RETRY_OPTIONS } from "./retry.ts";
 
+export interface ChatFilePart {
+  mediaType: string;
+  url: string;
+}
+
 export interface ChatRequest {
   message?: string;
+  files?: ChatFilePart[];
   replyTo?: DeliveryTarget;
 }
 
@@ -79,7 +85,15 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
     const message = req?.message ?? "";
     const replyTo = req?.replyTo;
     const history: ModelMessage[] = (await ctx.get<ModelMessage[]>("history")) ?? [];
-    history.push({ role: "user", content: message });
+
+    const fileParts = (req?.files ?? []).map((f) => {
+      const base64 = f.url.includes(",") ? f.url.split(",")[1] : f.url;
+      return { type: "image" as const, image: base64, mimeType: f.mediaType };
+    });
+    const userContent = fileParts.length > 0
+      ? [{ type: "text" as const, text: message }, ...fileParts]
+      : message;
+    history.push({ role: "user", content: userContent });
 
     const topic = replyTo?.channel === "web" ? (replyTo.address ?? "") : "";
     const publish = topic ? createPubsubPublisher("pubsub") : null;
