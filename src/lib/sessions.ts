@@ -3,13 +3,13 @@
  *
  * Sessions are identified by a locally-generated UUID. The full list and the
  * active session ID are persisted so they survive a page reload.
- * Chat message history (a mirror of the UI state) is stored per-session so
- * useChat can be pre-seeded on revisit.
+ * Chat message history (a mirror of assistant-ui thread state) is stored
+ * per-session so useRestateRuntime can be pre-seeded with initialMessages.
  */
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { UIMessage } from "ai";
+import type { ThreadMessageLike } from "@assistant-ui/react";
 
 export interface Session {
   id: string;
@@ -21,11 +21,10 @@ const SESSIONS_KEY = "agent.sessions";
 const ACTIVE_KEY = "agent.activeSession";
 const USER_ID_KEY = "agent.userId";
 const messagesKey = (id: string) => `agent.messages.${id}`;
-const durationsKey = (id: string) => `agent.durations.${id}`;
 
 /**
  * Returns a stable, cross-session user ID stored in localStorage.
- * This is used to scope long-term memory in Mem0 across multiple chat sessions.
+ * Used to scope long-term memory in Mem0 across multiple chat sessions.
  */
 export function getOrCreateUserId(): string {
   let id = localStorage.getItem(USER_ID_KEY);
@@ -56,30 +55,31 @@ function writeActive(id: string) {
   localStorage.setItem(ACTIVE_KEY, id);
 }
 
-export function readMessages(id: string): UIMessage[] {
+/**
+ * Load persisted messages for a session as ThreadMessageLike.
+ * Date objects are revived from ISO strings (JSON.stringify serialises Date → string).
+ */
+export function readMessages(id: string): ThreadMessageLike[] {
   try {
-    return JSON.parse(
-      localStorage.getItem(messagesKey(id)) ?? "[]"
-    ) as UIMessage[];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = JSON.parse(localStorage.getItem(messagesKey(id)) ?? "[]") as any[];
+    if (!Array.isArray(raw)) return [];
+    return raw
+      // Skip messages in old UIMessage format (parts[] instead of content[]).
+      .filter((m) => m?.role && Array.isArray(m?.content))
+      .map((m) => ({
+        ...m,
+        createdAt: m.createdAt ? new Date(m.createdAt as string) : new Date(),
+      }));
   } catch {
     return [];
   }
 }
 
-export function writeMessages(id: string, messages: UIMessage[]) {
+/** Persist assistant-ui thread messages for a session. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function writeMessages(id: string, messages: any[]) {
   localStorage.setItem(messagesKey(id), JSON.stringify(messages));
-}
-
-export function readDurations(id: string): Record<string, number> {
-  try {
-    return JSON.parse(localStorage.getItem(durationsKey(id)) ?? "{}") as Record<string, number>;
-  } catch {
-    return {};
-  }
-}
-
-export function writeDurations(id: string, durations: Record<string, number>) {
-  localStorage.setItem(durationsKey(id), JSON.stringify(durations));
 }
 
 export function useSessions() {
@@ -120,26 +120,21 @@ export function useSessions() {
     setActiveId(id);
   }, []);
 
-  const remove = useCallback(
-    (id: string) => {
-      setSessions((prev) => {
-        const next = prev.filter((s) => s.id !== id);
-        writeSessions(next);
-        // Remove stored messages and durations for the deleted session.
-        localStorage.removeItem(messagesKey(id));
-        localStorage.removeItem(durationsKey(id));
-        return next;
-      });
-      setActiveId((prev) => {
-        if (prev !== id) return prev;
-        const remaining = readSessions().filter((s) => s.id !== id);
-        const next = remaining[0]?.id ?? null;
-        if (next) writeActive(next);
-        return next;
-      });
-    },
-    []
-  );
+  const remove = useCallback((id: string) => {
+    setSessions((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      writeSessions(next);
+      localStorage.removeItem(messagesKey(id));
+      return next;
+    });
+    setActiveId((prev) => {
+      if (prev !== id) return prev;
+      const remaining = readSessions().filter((s) => s.id !== id);
+      const next = remaining[0]?.id ?? null;
+      if (next) writeActive(next);
+      return next;
+    });
+  }, []);
 
   const rename = useCallback((id: string, title: string) => {
     setSessions((prev) => {
