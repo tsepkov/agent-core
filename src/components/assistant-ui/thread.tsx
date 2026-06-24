@@ -10,6 +10,7 @@ import {
   AttachmentPrimitive,
   useAuiState,
   useAttachment,
+  useMessageTiming,
 } from "@assistant-ui/react";
 import {
   Collapsible,
@@ -36,7 +37,7 @@ import {
   SendIcon,
   SquareIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 // ---------------------------------------------------------------------------
 // Shared
@@ -92,23 +93,63 @@ function AttachmentPreview() {
 }
 
 // ---------------------------------------------------------------------------
-// Reasoning part — collapsible, streaming-aware
+// Thinking/Thought indicator — timer + optional reasoning text collapsible
 // ---------------------------------------------------------------------------
 
-function ReasoningPart({ text }: { text: string }) {
+function ThinkingIndicator() {
   const isRunning = useAuiState((s) => s.message.status?.type === "running");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const reasoningText = useAuiState((s) => (s.message.content as any[])?.find((p) => p.type === "reasoning")?.text as string | undefined);
+  const timing = useMessageTiming();
+  const finalSeconds = timing?.totalStreamTime !== undefined
+    ? Math.round(timing.totalStreamTime / 1000)
+    : 0;
+
+  // Live elapsed counter while running.
+  const startRef = useRef<number | null>(null);
+  const [liveSeconds, setLiveSeconds] = useState(0);
+
+  useEffect(() => {
+    if (isRunning) {
+      if (startRef.current === null) startRef.current = Date.now();
+      setLiveSeconds(Math.round((Date.now() - startRef.current) / 1000));
+      const id = setInterval(() => {
+        setLiveSeconds(Math.round((Date.now() - startRef.current!) / 1000));
+      }, 1000);
+      return () => clearInterval(id);
+    } else {
+      // Reset for future re-runs (e.g. Reload button).
+      startRef.current = null;
+      setLiveSeconds(0);
+    }
+  }, [isRunning]);
+
+  // Hide for old completed messages with no useful data.
+  if (!isRunning && finalSeconds === 0 && !reasoningText) return null;
+
+  const label = isRunning
+    ? `Thinking… ${liveSeconds}s`
+    : `Thought for ${finalSeconds} second${finalSeconds !== 1 ? "s" : ""}`;
+
+  if (!reasoningText) {
+    // Plain status line — no expand toggle.
+    return (
+      <div className="flex items-center gap-2 mb-2 text-sm text-muted-foreground">
+        <BrainIcon className="size-4 shrink-0" />
+        <span>{label}</span>
+      </div>
+    );
+  }
 
   return (
-    <Collapsible defaultOpen={isRunning} className="mb-2">
+    <Collapsible defaultOpen={false} className="mb-2">
       <CollapsibleTrigger className="flex w-full items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
         <BrainIcon className="size-4 shrink-0" />
-        <span className="flex-1 text-left">
-          {isRunning ? "Thinking..." : "Thought"}
-        </span>
+        <span className="flex-1 text-left">{label}</span>
         <ChevronDownIcon className="size-4 transition-transform data-[state=open]:rotate-180" />
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-2 text-sm text-muted-foreground border-l-2 pl-3">
-        <Streamdown plugins={streamdownPlugins}>{text}</Streamdown>
+        <Streamdown plugins={streamdownPlugins}>{reasoningText}</Streamdown>
       </CollapsibleContent>
     </Collapsible>
   );
@@ -206,11 +247,15 @@ function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="group flex flex-col w-full mb-6">
       <div className="max-w-[95%] flex flex-col gap-1 text-sm">
+        {/* Thinking/Thought timer — always rendered so non-thinking models show feedback */}
+        <ThinkingIndicator />
+
         <MessagePrimitive.Parts>
           {({ part }) => {
             switch (part.type) {
               case "reasoning":
-                return <ReasoningPart text={part.text} />;
+                // Handled by ThinkingIndicator above.
+                return null;
 
               case "tool-call": {
                 const p = part as unknown as ToolCallPart;

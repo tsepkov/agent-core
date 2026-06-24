@@ -68,9 +68,20 @@ function makeRestateAdapter(threadListItemRef: { current: ThreadListItemRuntime 
       const tools = new Map<string, ThreadAssistantMessagePart & { type: "tool-call" }>();
       let reasoningText = "";
       let responseText = "";
+      const streamStartTime = Date.now();
+      let totalChunks = 0;
+
+      const buildContent = (): ThreadAssistantMessagePart[] => {
+        const content: ThreadAssistantMessagePart[] = [];
+        if (reasoningText) content.push({ type: "reasoning", text: reasoningText });
+        for (const t of tools.values()) content.push(t);
+        if (responseText) content.push({ type: "text", text: responseText });
+        return content;
+      };
 
       for await (const raw of pubsub.pull({ topic, offset: 0, signal: abortSignal })) {
         const event = raw as WireEvent;
+        totalChunks++;
 
         if (event.kind === "tool-input") {
           tools.set(event.toolCallId, {
@@ -95,13 +106,22 @@ function makeRestateAdapter(threadListItemRef: { current: ThreadListItemRuntime 
           break;
         }
 
-        const content: ThreadAssistantMessagePart[] = [];
-        if (reasoningText) content.push({ type: "reasoning", text: reasoningText });
-        for (const t of tools.values()) content.push(t);
-        if (responseText) content.push({ type: "text", text: responseText });
-
-        yield { content };
+        yield { content: buildContent() };
       }
+
+      // Final yield with timing metadata so useMessageTiming() and history persistence
+      // carry the elapsed duration across reloads.
+      yield {
+        content: buildContent(),
+        metadata: {
+          timing: {
+            streamStartTime,
+            totalStreamTime: Date.now() - streamStartTime,
+            totalChunks,
+            toolCallCount: tools.size,
+          },
+        },
+      };
     },
   };
 }
