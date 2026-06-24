@@ -1,7 +1,7 @@
 import * as restate from "@restatedev/restate-sdk";
 import type { ObjectContext, ObjectOptions } from "@restatedev/restate-sdk";
 import { generateText, stepCountIs, wrapLanguageModel } from "ai";
-import type { ModelMessage, ToolSet } from "ai";
+import type { ModelMessage, ToolSet, UserContent } from "ai";
 import type { LanguageModelV3 } from "@ai-sdk/provider";
 import { durableCalls } from "@restatedev/vercel-ai-middleware";
 import { NoopDeliveryAdapter, NoopStreamAdapter } from "./delivery/index.ts";
@@ -9,7 +9,7 @@ import type { AgentTool } from "./tool.ts";
 import type { DeliveryAdapter, DeliveryTarget, OutboxMessage, WireEvent } from "./delivery/index.ts";
 import type { StreamAdapter } from "./delivery/index.ts";
 import { errorClassifierMiddleware, LLM_RETRY_OPTIONS } from "./retry.ts";
-import { createMemoryAdapter, MemoryAdapter } from "./memory.ts";
+import { MemoryAdapter } from "./memory.ts";
 
 /**
  * Per-step metering report emitted by the agent loop.
@@ -120,7 +120,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
     this.model = config.model;
     this.maxSteps = config.maxSteps ?? 20;
     this.delivery = config.delivery ?? new NoopDeliveryAdapter();
-    this.memory = config.memory ?? createMemoryAdapter();
+    this.memory = config.memory ?? MemoryAdapter.fromEnv();
     this.stream = config.stream ?? new NoopStreamAdapter();
     this.onUsage = config.onUsage;
   }
@@ -130,6 +130,45 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
     return { chat: this.chat.bind(this), reset: this.reset.bind(this) };
   }
 
+  /**
+   * Convert raw file attachments from the wire request into AI SDK content parts.
+   * Override to add pre-processing (OCR, compression, format conversion, etc.).
+   */
+  protected buildUserContent(
+    message: string,
+    files: ChatFilePart[],
+  ): UserContent {
+    const parts = files.map((f) => {
+      const base64 = f.url.includes(",") ? f.url.split(",")[1] : f.url;
+      if (f.mediaType.startsWith("image/")) {
+        return { type: "image" as const, image: base64, mimeType: f.mediaType };
+      }
+      return { type: "file" as const, data: base64, mediaType: f.mediaType };
+    });
+    return parts.length > 0
+      ? [{ type: "text" as const, text: message }, ...parts]
+      : message;
+  }
+
+  /**
+   * Called after the LLM finishes and the reply is ready, before delivery.
+   * Override to add post-processing, logging, analytics, etc.
+   * The base implementation is a no-op.
+   */
+  protected async onAfterGenerate(
+    _ctx: ObjectContext,
+    _req: ChatRequest,
+    _output: GenerateOutput,
+  ): Promise<void> {}
+
+  /**
+   * Build the user-facing error reply when the LLM call fails terminally.
+   * Override to localise the message or include a support reference ID.
+   */
+  protected getErrorReply(_err: restate.TerminalError): string {
+    return "The model is temporarily unavailable (rate-limit or upstream error). Please try again.";
+  }
+
   async chat(ctx: ObjectContext, req: ChatRequest): Promise<{ messageId: string }> {
     const message = req?.message ?? "";
     const replyTo = req?.replyTo;
@@ -137,17 +176,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
     const userId = req?.userId ?? ctx.key;
     const history: ModelMessage[] = (await ctx.get<ModelMessage[]>("history")) ?? [];
 
-    const fileParts = (req?.files ?? []).map((f) => {
-      const base64 = f.url.includes(",") ? f.url.split(",")[1] : f.url;
-      if (f.mediaType.startsWith("image/")) {
-        return { type: "image" as const, image: base64, mimeType: f.mediaType };
-      }
-      return { type: "file" as const, data: base64, mediaType: f.mediaType };
-    });
-    const userContent = fileParts.length > 0
-      ? [{ type: "text" as const, text: message }, ...fileParts]
-      : message;
-    history.push({ role: "user", content: userContent });
+    history.push({ role: "user", content: this.buildUserContent(message, req?.files ?? []) });
 
     // Recall relevant long-term memories and inject them ephemerally (not stored in history).
     const memories = await this.memory.recall(ctx, userId, message);
@@ -165,7 +194,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
 
     let replyContent = "";
     try {
-      const { text, reasoningText, response } = await this.durableGenerate({
+      const output = await this.durableGenerate({
         ctx,
         model: this.model,
         system: this.systemPrompt,
@@ -175,12 +204,15 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
         emitToolEvent,
         onUsage: this.onUsage,
       });
+      const { text, reasoningText, response } = output;
       if (reasoningText) {
         emitToolEvent({ kind: "reasoning", text: reasoningText });
       }
       history.push(...response.messages);
       ctx.set("history", history);
       replyContent = text;
+
+      await this.onAfterGenerate(ctx, req, output);
 
       // Persist the exchange to long-term memory; Mem0 decides what's worth keeping.
       await this.memory.remember(ctx, userId, [
@@ -189,7 +221,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
       ]);
     } catch (err) {
       if (!(err instanceof restate.TerminalError)) throw err;
-      replyContent = "The model is temporarily unavailable (rate-limit or upstream error). Please try again.";
+      replyContent = this.getErrorReply(err);
     }
 
     const reply: OutboxMessage = {

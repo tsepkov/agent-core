@@ -32,6 +32,26 @@ export abstract class MemoryAdapter {
 
   /** Retrieve memories relevant to the current user message. Returns plain text snippets. */
   abstract recall(ctx: ObjectContext, userId: string, query: string): Promise<string[]>;
+
+  /**
+   * Select a backend from the MEMORY_BACKEND environment variable.
+   *
+   *   MEMORY_BACKEND=auto (default) — mem0-hosted if MEM0_API_KEY is set, otherwise noop.
+   *   MEMORY_BACKEND=noop          — always noop, even if MEM0_API_KEY is set.
+   *   MEMORY_BACKEND=mem0-hosted   — always hosted (throws if MEM0_API_KEY is missing).
+   */
+  static fromEnv(): MemoryAdapter {
+    const backend = (process.env.MEMORY_BACKEND ?? "auto") as MemoryBackend;
+    switch (backend) {
+      case "noop":
+        return new NoopMemoryAdapter();
+      case "mem0-hosted":
+        return new Mem0HostedMemoryAdapter();
+      case "auto":
+      default:
+        return process.env.MEM0_API_KEY ? new Mem0HostedMemoryAdapter() : new NoopMemoryAdapter();
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -81,35 +101,9 @@ export class Mem0HostedMemoryAdapter extends MemoryAdapter {
 // Uses mem0ai/oss with a Qdrant-compatible vector store (e.g. YDB's Qdrant-compatible layer).
 // Activated by MEMORY_BACKEND=mem0-oss. Not implemented until we migrate off the free tier.
 
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
-
-/** Controls which memory backend createMemoryAdapter() returns. */
+/** Controls which memory backend MemoryAdapter.fromEnv() selects. */
 export type MemoryBackend =
-  | "auto"         // back-compat default: mem0-hosted if MEM0_API_KEY is set, else noop
-  | "noop"         // force no-op (useful in tests or when memory is not needed)
-  | "mem0-hosted"; // force Mem0HostedMemoryAdapter (requires MEM0_API_KEY)
+  | "auto"         // mem0-hosted if MEM0_API_KEY is set, otherwise noop
+  | "noop"         // always noop (useful in tests or when memory is not needed)
+  | "mem0-hosted"; // always Mem0HostedMemoryAdapter (throws if MEM0_API_KEY is missing)
   // future: | "mem0-oss"  — self-hosted mem0 OSS with Qdrant/YDB vector store
-
-/**
- * Returns a MemoryAdapter instance based on the MEMORY_BACKEND environment variable.
- *
- *   MEMORY_BACKEND=auto (default) — hosted if MEM0_API_KEY present, otherwise noop.
- *   MEMORY_BACKEND=noop          — always noop, even if MEM0_API_KEY is set.
- *   MEMORY_BACKEND=mem0-hosted   — always hosted (throws if MEM0_API_KEY is missing).
- */
-export function createMemoryAdapter(): MemoryAdapter {
-  const backend = (process.env.MEMORY_BACKEND ?? "auto") as MemoryBackend;
-  switch (backend) {
-    case "noop":
-      return new NoopMemoryAdapter();
-    case "mem0-hosted":
-      return new Mem0HostedMemoryAdapter();
-    // case "mem0-oss":
-    //   return new Mem0OssMemoryAdapter();
-    case "auto":
-    default:
-      return process.env.MEM0_API_KEY ? new Mem0HostedMemoryAdapter() : new NoopMemoryAdapter();
-  }
-}

@@ -1,5 +1,5 @@
 import type { ObjectContext } from "@restatedev/restate-sdk";
-import { createPubsubPublisher } from "@restatedev/pubsub";
+import { PubsubChannelBase } from "./base.ts";
 import type { DeliveryTarget, WireEvent } from "./base.ts";
 
 /**
@@ -17,17 +17,9 @@ export class NoopStreamAdapter extends StreamAdapter {
 }
 
 /** Streams intermediate WireEvents into a Restate pubsub topic for web clients. */
-export class PubsubStreamAdapter extends StreamAdapter {
-  private readonly publish: ReturnType<typeof createPubsubPublisher>;
-
-  constructor(pubsubName = "pubsub") {
-    super();
-    this.publish = createPubsubPublisher(pubsubName);
-  }
-
+export class PubsubStreamAdapter extends PubsubChannelBase implements StreamAdapter {
   emit(ctx: ObjectContext, target: DeliveryTarget | undefined, event: WireEvent): void {
-    if (target?.channel !== "web") return;
-    const topic = target.address ?? "";
+    const topic = this.resolveWebTopic(target);
     if (!topic) return;
     this.publish(ctx, topic, event);
   }
