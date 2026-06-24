@@ -1,9 +1,8 @@
 {
   "name": "@agent-scaffold/agent-core",
   "version": "0.1.0",
-  "description": "Reusable durable-agent runtime core extracted from the Next.js demo app.",
+  "description": "Reusable durable-agent runtime core: Restate + Vercel AI SDK.",
   "type": "module",
-  "private": true,
   "exports": {
     ".": "./src/index.ts",
     "./agent": "./src/agent.ts",
@@ -13,5 +12,24 @@
     "./retry": "./src/retry.ts",
     "./tools/datetime": "./src/tools/datetime/index.ts",
     "./tool": "./src/tool.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@openrouter/ai-sdk-provider": "^2.9.1",
+    "@restatedev/pubsub": "^0.3.2",
+    "@restatedev/restate-sdk": "^1.14.5",
+    "@restatedev/vercel-ai-middleware": "^0.3.1",
+    "mem0ai": "^3.0.9"
+  },
+  "peerDependencies": {
+    "ai": "^6.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "^3.0.10",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
   }
 }
