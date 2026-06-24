@@ -7,7 +7,9 @@ import {
   ComposerPrimitive,
   ActionBarPrimitive,
   BranchPickerPrimitive,
+  AttachmentPrimitive,
   useAuiState,
+  useAttachment,
 } from "@assistant-ui/react";
 import {
   Collapsible,
@@ -28,11 +30,12 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
+  PaperclipIcon,
   RotateCcwIcon,
   SendIcon,
   SquareIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
 // ---------------------------------------------------------------------------
 // Shared
@@ -41,11 +44,56 @@ import type { ReactNode } from "react";
 const streamdownPlugins = { cjk, code, math, mermaid };
 
 // ---------------------------------------------------------------------------
+// Attachment preview — works for both composer (file) and message (data URL)
+// ---------------------------------------------------------------------------
+
+function AttachmentPreview() {
+  const state = useAttachment();
+  const objectUrlRef = useRef<string | null>(null);
+
+  // For pending composer attachments, generate an object URL from the File.
+  const src = useMemo(() => {
+    if (state.source !== "message") {
+      // Pending composer attachment — read from File directly.
+      if (state.file) {
+        const url = URL.createObjectURL(state.file);
+        objectUrlRef.current = url;
+        return url;
+      }
+      // Might have content already (sent but still in composer area).
+      const imgPart = state.content?.find((p) => p.type === "image");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return imgPart ? (imgPart as any).image : undefined;
+    }
+    // Message attachment — content is an array of ThreadUserMessagePart.
+    const imgPart = state.content?.find((p) => p.type === "image");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return imgPart ? (imgPart as any).image : undefined;
+  }, [state]);
+
+  // Revoke object URL on unmount to avoid memory leak.
+  useEffect(() => {
+    return () => {
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    };
+  }, []);
+
+  if (state.type !== "image" || !src) return null;
+
+  return (
+    <img
+      src={src}
+      alt={state.name}
+      className="size-14 rounded-md object-cover"
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Reasoning part — collapsible, streaming-aware
 // ---------------------------------------------------------------------------
 
 function ReasoningPart({ text }: { text: string }) {
-  // Access message status from within the message context.
   const isRunning = useAuiState((s) => s.message.status?.type === "running");
 
   return (
@@ -66,7 +114,6 @@ function ReasoningPart({ text }: { text: string }) {
 
 // ---------------------------------------------------------------------------
 // Default tool-call part — collapsible, shows input/output
-// Registered makeAssistantToolUI components override this via part.toolUI.
 // ---------------------------------------------------------------------------
 
 type ToolCallPart = {
@@ -124,15 +171,26 @@ function DefaultToolCall({ toolName, args, result, isError }: ToolCallPart) {
 function UserMessage() {
   return (
     <MessagePrimitive.Root className="flex justify-end w-full mb-6">
-      <div className="max-w-[80%] rounded-lg bg-secondary px-4 py-3 text-sm text-foreground">
-        <MessagePrimitive.Parts>
-          {({ part }) => {
-            if (part.type === "text") {
-              return <p className="whitespace-pre-wrap">{part.text}</p>;
-            }
-            return null;
-          }}
-        </MessagePrimitive.Parts>
+      <div className="max-w-[80%] flex flex-col items-end gap-2">
+        {/* Attached images above the text bubble */}
+        <MessagePrimitive.Attachments>
+          {() => (
+            <AttachmentPrimitive.Root className="relative">
+              <AttachmentPreview />
+            </AttachmentPrimitive.Root>
+          )}
+        </MessagePrimitive.Attachments>
+
+        <div className="rounded-lg bg-secondary px-4 py-3 text-sm text-foreground">
+          <MessagePrimitive.Parts>
+            {({ part }) => {
+              if (part.type === "text") {
+                return <p className="whitespace-pre-wrap">{part.text}</p>;
+              }
+              return null;
+            }}
+          </MessagePrimitive.Parts>
+        </div>
       </div>
     </MessagePrimitive.Root>
   );
@@ -145,7 +203,6 @@ function UserMessage() {
 function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="group flex flex-col w-full mb-6">
-      {/* Content */}
       <div className="max-w-[95%] flex flex-col gap-1 text-sm">
         <MessagePrimitive.Parts>
           {({ part }) => {
@@ -154,7 +211,6 @@ function AssistantMessage() {
                 return <ReasoningPart text={part.text} />;
 
               case "tool-call": {
-                // Registered makeAssistantToolUI takes priority via part.toolUI.
                 const p = part as unknown as ToolCallPart;
                 return p.toolUI ? <>{p.toolUI}</> : <DefaultToolCall {...p} />;
               }
@@ -187,7 +243,6 @@ function AssistantMessage() {
           </Button>
         </ActionBarPrimitive.Reload>
 
-        {/* Branch picker — visible only when message has branches (edit history) */}
         <AuiIf condition={({ message }) => message.branchCount > 1}>
           <BranchPickerPrimitive.Root className="flex items-center gap-0.5 text-xs text-muted-foreground">
             <BranchPickerPrimitive.Previous asChild>
@@ -218,36 +273,62 @@ function AssistantMessage() {
 
 function Composer() {
   return (
-    <ComposerPrimitive.Root className="relative flex items-end gap-2 rounded-xl border bg-background px-4 py-3 shadow-sm focus-within:ring-1 focus-within:ring-ring">
-      <ComposerPrimitive.Input
-        className="flex-1 resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground max-h-40"
-        placeholder="Напишите сообщение…"
-        rows={1}
-        autoFocus
-      />
+    <div className="flex flex-col gap-2">
+      {/* Pending attachment thumbnails */}
+      <ComposerPrimitive.Attachments>
+        {() => (
+          <AttachmentPrimitive.Root className="relative inline-flex">
+            <AttachmentPreview />
+            <AttachmentPrimitive.Remove asChild>
+              <button
+                className="absolute -top-1.5 -right-1.5 flex size-4 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-xs leading-none"
+                title="Удалить"
+              >
+                ×
+              </button>
+            </AttachmentPrimitive.Remove>
+          </AttachmentPrimitive.Root>
+        )}
+      </ComposerPrimitive.Attachments>
 
-      {/* Send / Cancel toggle */}
-      <AuiIf condition={({ thread }) => thread.isRunning}>
-        <ComposerPrimitive.Cancel asChild>
-          <Button variant="ghost" size="icon" className="size-8 shrink-0" title="Остановить">
-            <SquareIcon className="size-4" />
-          </Button>
-        </ComposerPrimitive.Cancel>
-      </AuiIf>
+      <ComposerPrimitive.Root className="relative flex items-end gap-2 rounded-xl border bg-background px-4 py-3 shadow-sm focus-within:ring-1 focus-within:ring-ring">
+        <ComposerPrimitive.Input
+          className="flex-1 resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground max-h-40"
+          placeholder="Напишите сообщение…"
+          rows={1}
+          autoFocus
+        />
 
-      <AuiIf condition={({ thread }) => !thread.isRunning}>
-        <ComposerPrimitive.Send asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8 shrink-0 disabled:opacity-40"
-            title="Отправить"
-          >
-            <SendIcon className="size-4" />
+        {/* Attach image button */}
+        <ComposerPrimitive.AddAttachment asChild>
+          <Button variant="ghost" size="icon" className="size-8 shrink-0" title="Прикрепить изображение">
+            <PaperclipIcon className="size-4" />
           </Button>
-        </ComposerPrimitive.Send>
-      </AuiIf>
-    </ComposerPrimitive.Root>
+        </ComposerPrimitive.AddAttachment>
+
+        {/* Send / Cancel toggle */}
+        <AuiIf condition={({ thread }) => thread.isRunning}>
+          <ComposerPrimitive.Cancel asChild>
+            <Button variant="ghost" size="icon" className="size-8 shrink-0" title="Остановить">
+              <SquareIcon className="size-4" />
+            </Button>
+          </ComposerPrimitive.Cancel>
+        </AuiIf>
+
+        <AuiIf condition={({ thread }) => !thread.isRunning}>
+          <ComposerPrimitive.Send asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8 shrink-0 disabled:opacity-40"
+              title="Отправить"
+            >
+              <SendIcon className="size-4" />
+            </Button>
+          </ComposerPrimitive.Send>
+        </AuiIf>
+      </ComposerPrimitive.Root>
+    </div>
   );
 }
 
@@ -255,14 +336,6 @@ function Composer() {
 // Main Thread export
 // ---------------------------------------------------------------------------
 
-/**
- * Chat thread built on vanilla assistant-ui primitives.
- *
- * Rendering:  primitives + Tailwind (no AI Elements dependency).
- * Transport:  supplied via AssistantRuntimeProvider (useRestateRuntime).
- * Tool UI:    default collapsible fallback; override with makeAssistantToolUI.
- * Markdown:   Streamdown with CJK/code/math/mermaid plugins (same as before).
- */
 export function Thread() {
   return (
     <ThreadPrimitive.Root className="relative flex flex-col h-full">

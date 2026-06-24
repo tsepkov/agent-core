@@ -11,11 +11,12 @@ export async function POST(req: Request): Promise<Response> {
     message?: string;
     messageId?: string;
     userId?: string;
+    files?: { mediaType: string; url: string }[];
   };
-  const { sessionId, message, messageId, userId } = body;
+  const { sessionId, message, messageId, userId, files } = body;
 
-  if (!sessionId || !message?.trim()) {
-    return new Response("sessionId and message are required", { status: 400 });
+  if (!sessionId || (!message?.trim() && !files?.length)) {
+    return new Response("sessionId and message or files are required", { status: 400 });
   }
 
   const idempotencyKey = messageId ? `${sessionId}-${messageId}` : `${sessionId}-${crypto.randomUUID()}`;
@@ -24,7 +25,8 @@ export async function POST(req: Request): Promise<Response> {
   const ingress = connect({ url: INGRESS });
   await ingress.objectSendClient(manager, sessionId).chat(
     {
-      message: message.trim(),
+      message: message?.trim() ?? "",
+      files: files?.length ? files : undefined,
       replyTo: { channel: "web", address: topic },
       userId: userId ?? sessionId,
     },
