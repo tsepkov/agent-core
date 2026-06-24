@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@ai-sdk/mcp": "1.0.14",
+    "@assistant-ui/core": "^0.2.18",
     "@assistant-ui/react": "^0.14.23",
     "@assistant-ui/react-markdown": "^0.14.4",
     "@base-ui/react": "^1.6.0",
