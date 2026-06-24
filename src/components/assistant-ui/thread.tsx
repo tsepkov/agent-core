@@ -30,6 +30,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
+  FileIcon,
   PaperclipIcon,
   RotateCcwIcon,
   SendIcon,
@@ -51,41 +52,42 @@ function AttachmentPreview() {
   const state = useAttachment();
   const objectUrlRef = useRef<string | null>(null);
 
-  // For pending composer attachments, generate an object URL from the File.
-  const src = useMemo(() => {
-    if (state.source !== "message") {
-      // Pending composer attachment — read from File directly.
-      if (state.file) {
-        const url = URL.createObjectURL(state.file);
-        objectUrlRef.current = url;
-        return url;
-      }
-      // Might have content already (sent but still in composer area).
-      const imgPart = state.content?.find((p) => p.type === "image");
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return imgPart ? (imgPart as any).image : undefined;
+  const imageSrc = useMemo(() => {
+    if (state.type !== "image") return undefined;
+    // Pending (file in hand) — build an object URL.
+    if (state.source !== "message" && state.file) {
+      const url = URL.createObjectURL(state.file);
+      objectUrlRef.current = url;
+      return url;
     }
-    // Message attachment — content is an array of ThreadUserMessagePart.
+    // Complete attachment stored in content.
     const imgPart = state.content?.find((p) => p.type === "image");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return imgPart ? (imgPart as any).image : undefined;
+    return imgPart ? (imgPart as any).image as string : undefined;
   }, [state]);
 
-  // Revoke object URL on unmount to avoid memory leak.
   useEffect(() => {
     return () => {
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     };
   }, []);
 
-  if (state.type !== "image" || !src) return null;
+  if (state.type === "image" && imageSrc) {
+    return (
+      <img
+        src={imageSrc}
+        alt={state.name}
+        className="size-14 rounded-md object-cover"
+      />
+    );
+  }
 
+  // Document / file — show icon chip with name.
   return (
-    <img
-      src={src}
-      alt={state.name}
-      className="size-14 rounded-md object-cover"
-    />
+    <div className="flex items-center gap-1.5 rounded-md border bg-muted/50 px-2 py-1.5 text-xs text-muted-foreground max-w-[140px]">
+      <FileIcon className="size-4 shrink-0" />
+      <span className="truncate">{state.name}</span>
+    </div>
   );
 }
 

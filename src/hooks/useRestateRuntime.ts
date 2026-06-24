@@ -4,7 +4,6 @@ import { useRef } from "react";
 import {
   useLocalRuntime,
   useThreadListItemRuntime,
-  SimpleImageAttachmentAdapter,
   type AssistantRuntime,
   type ChatModelAdapter,
   type ThreadListItemRuntime,
@@ -14,29 +13,34 @@ import {
 import { createPubsubClient } from "@restatedev/pubsub-client";
 import type { WireEvent } from "@/core/delivery";
 import { getOrCreateUserId } from "@/lib/sessions";
+import { compositeAttachmentAdapter } from "@/lib/attachmentAdapter";
 
 const INGRESS = process.env.NEXT_PUBLIC_RESTATE_INGRESS_URL ?? "http://localhost:8080";
-
-const attachmentAdapter = new SimpleImageAttachmentAdapter();
 
 function makeRestateAdapter(threadListItemRef: { current: ThreadListItemRuntime | null }): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
-      // Extract text and image attachments from the last user message.
       const lastUser = [...messages].reverse().find((m) => m.role === "user");
       const text = (lastUser?.content ?? [])
         .filter((p): p is { type: "text"; text: string } => p.type === "text")
         .map((p) => p.text)
         .join("");
 
+      // Collect both image and file attachments.
       const files = (lastUser?.attachments as readonly CompleteAttachment[] | undefined ?? [])
         .flatMap((att) =>
-          (att.content ?? [])
-            .filter((p): p is { type: "image"; image: string } => p.type === "image")
-            .map((p) => ({ mediaType: att.contentType ?? "image/jpeg", url: p.image as string }))
+          (att.content ?? []).flatMap((p) => {
+            if (p.type === "image") {
+              return [{ mediaType: att.contentType ?? "image/jpeg", url: (p as { type: "image"; image: string }).image }];
+            }
+            if (p.type === "file") {
+              const fp = p as { type: "file"; data: string; mimeType: string };
+              return [{ mediaType: fp.mimeType, url: `data:${fp.mimeType};base64,${fp.data}` }];
+            }
+            return [];
+          })
         );
 
-      // Use the thread's stable remoteId as the Restate session key.
       const threadListItem = threadListItemRef.current;
       if (!threadListItem) throw new Error("ThreadListItemRuntime not available");
       const { remoteId: sessionId } = await threadListItem.initialize();
@@ -102,11 +106,6 @@ function makeRestateAdapter(threadListItemRef: { current: ThreadListItemRuntime 
   };
 }
 
-/**
- * Wraps the Restate pubsub transport as a LocalRuntime ChatModelAdapter.
- * Attachment support: SimpleImageAttachmentAdapter encodes images as data URLs
- * before send(); those are forwarded to /api/chat as ChatRequest.files.
- */
 export function useRestateRuntime(): AssistantRuntime {
   const threadListItem = useThreadListItemRuntime();
   const threadListItemRef = useRef<ThreadListItemRuntime | null>(null);
@@ -118,6 +117,6 @@ export function useRestateRuntime(): AssistantRuntime {
   }
 
   return useLocalRuntime(adapterRef.current, {
-    adapters: { attachments: attachmentAdapter },
+    adapters: { attachments: compositeAttachmentAdapter },
   });
 }

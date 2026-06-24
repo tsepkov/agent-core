@@ -139,7 +139,10 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
 
     const fileParts = (req?.files ?? []).map((f) => {
       const base64 = f.url.includes(",") ? f.url.split(",")[1] : f.url;
-      return { type: "image" as const, image: base64, mimeType: f.mediaType };
+      if (f.mediaType.startsWith("image/")) {
+        return { type: "image" as const, image: base64, mimeType: f.mediaType };
+      }
+      return { type: "file" as const, data: base64, mediaType: f.mediaType };
     });
     const userContent = fileParts.length > 0
       ? [{ type: "text" as const, text: message }, ...fileParts]
