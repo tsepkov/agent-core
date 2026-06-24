@@ -4,60 +4,86 @@ import { TerminalError, RetryableError } from "@restatedev/restate-sdk";
 import type { RunOptions } from "@restatedev/restate-sdk";
 
 /**
- * Parse the `Retry-After` response header (seconds as integer, or HTTP-date) into seconds.
- * Header key matching is case-insensitive.
- * Returns undefined when the header is absent or unparseable.
+ * Classifies provider errors into Restate-aware retry semantics and builds the
+ * AI SDK middleware that wraps LLM calls.
+ *
+ * Override `classifyProviderError` or `parseRetryAfterSeconds` to customise
+ * error handling for a specific provider (e.g. different header names, custom
+ * status codes, additional retry signals).
+ *
+ * Used as a Strategy by `AgentObject`; supply a custom instance via
+ * `AgentObjectConfig.errorClassifier`.
  */
-export function parseRetryAfterSeconds(
-  headers: Record<string, string> | undefined
-): number | undefined {
-  if (!headers) return undefined;
-  const raw = Object.entries(headers).find(
-    ([k]) => k.toLowerCase() === "retry-after"
-  )?.[1];
-  if (raw === undefined) return undefined;
+export class ProviderErrorClassifier {
+  /**
+   * Parse the `Retry-After` response header (seconds as integer, or HTTP-date) into seconds.
+   * Header key matching is case-insensitive.
+   * Returns undefined when the header is absent or unparseable.
+   */
+  protected parseRetryAfterSeconds(
+    headers: Record<string, string> | undefined,
+  ): number | undefined {
+    if (!headers) return undefined;
+    const raw = Object.entries(headers).find(
+      ([k]) => k.toLowerCase() === "retry-after",
+    )?.[1];
+    if (raw === undefined) return undefined;
 
-  const asNum = Number(raw);
-  if (!Number.isNaN(asNum) && asNum >= 0) return asNum;
+    const asNum = Number(raw);
+    if (!Number.isNaN(asNum) && asNum >= 0) return asNum;
 
-  // HTTP-date format (e.g. "Wed, 21 Oct 2025 07:28:00 GMT")
-  const date = Date.parse(raw);
-  if (!Number.isNaN(date)) {
-    const seconds = Math.ceil((date - Date.now()) / 1000);
-    return seconds > 0 ? seconds : 0;
+    // HTTP-date format (e.g. "Wed, 21 Oct 2025 07:28:00 GMT")
+    const date = Date.parse(raw);
+    if (!Number.isNaN(date)) {
+      const seconds = Math.ceil((date - Date.now()) / 1000);
+      return seconds > 0 ? seconds : 0;
+    }
+
+    return undefined;
   }
 
-  return undefined;
-}
-
-/**
- * Classify a provider error and rethrow with the appropriate Restate semantics.
- *
- *  - Non-retryable `APICallError` (client 4xx)  → `TerminalError`   — fail-fast, no retry
- *  - Retryable `APICallError` (5xx / 429 / net) → `RetryableError`  — with retryAfter if available
- *  - Any other error                             → rethrow as-is     — Restate retries by default
- *
- * Always throws; return type is `never` so callers in catch blocks are typed correctly.
- * Must be called from inside a `ctx.run` closure where Restate controls the retry loop.
- */
-export function classifyProviderError(err: unknown): never {
-  if (APICallError.isInstance(err)) {
-    if (!err.isRetryable) {
-      // Non-retryable 4xx (bad request, unauthorized, forbidden…): fail immediately.
-      throw new TerminalError(err.message, { errorCode: err.statusCode });
+  /**
+   * Classify a provider error and rethrow with the appropriate Restate semantics.
+   *
+   *  - Non-retryable `APICallError` (client 4xx)  → `TerminalError`   — fail-fast, no retry
+   *  - Retryable `APICallError` (5xx / 429 / net) → `RetryableError`  — with retryAfter if available
+   *  - Any other error                             → rethrow as-is     — Restate retries by default
+   *
+   * Always throws; return type is `never` so callers in catch blocks are typed correctly.
+   * Must be called from inside a `ctx.run` closure where Restate controls the retry loop.
+   */
+  protected classifyProviderError(err: unknown): never {
+    if (APICallError.isInstance(err)) {
+      if (!err.isRetryable) {
+        throw new TerminalError(err.message, { errorCode: err.statusCode });
+      }
+      const retryAfterSeconds = this.parseRetryAfterSeconds(
+        err.responseHeaders as Record<string, string> | undefined,
+      );
+      if (retryAfterSeconds !== undefined) {
+        throw RetryableError.from(err, { retryAfter: { seconds: retryAfterSeconds } });
+      }
+      throw RetryableError.from(err);
     }
-    // Retryable upstream error (5xx, 429, timeout): honour Retry-After when present.
-    const retryAfterSeconds = parseRetryAfterSeconds(
-      err.responseHeaders as Record<string, string> | undefined
-    );
-    if (retryAfterSeconds !== undefined) {
-      throw RetryableError.from(err, { retryAfter: { seconds: retryAfterSeconds } });
-    }
-    // No Retry-After header — let Restate's built-in exponential backoff decide the delay.
-    throw RetryableError.from(err);
+    throw err as Error;
   }
-  // Non-API error (network outage, SDK internal) — rethrow; Restate retries by default.
-  throw err as Error;
+
+  /**
+   * Build the AI SDK middleware that maps provider errors to Restate semantics.
+   * Must be the **innermost** middleware when stacked with `durableCalls`.
+   */
+  buildMiddleware(): LanguageModelMiddleware {
+    return {
+      specificationVersion: "v3",
+      wrapGenerate: async ({ doGenerate }) => {
+        try {
+          return await doGenerate();
+        } catch (err) {
+          this.classifyProviderError(err);
+        }
+      },
+    };
+  }
 }
 
 /**
@@ -91,24 +117,3 @@ export const LLM_RETRY_OPTIONS = {
   maxRetryInterval: { seconds: 10 },
   maxRetryDuration: { minutes: 2 },
 } satisfies Omit<RunOptions<unknown>, "serde">;
-
-/**
- * AI SDK middleware that maps `APICallError` HTTP codes to Restate's `TerminalError` /
- * `RetryableError` so the `ctx.run` retry loop handles them correctly.
- *
- * Must be the **innermost** middleware (closest to the provider) when stacked with
- * `durableCalls`, so that converted errors propagate into `ctx.run`.
- *
- * Ordering in `wrapLanguageModel` (first = outermost = owns the retry loop):
- *   middleware: [durableCalls(ctx, LLM_RETRY_OPTIONS), errorClassifierMiddleware]
- */
-export const errorClassifierMiddleware: LanguageModelMiddleware = {
-  specificationVersion: "v3",
-  wrapGenerate: async ({ doGenerate }) => {
-    try {
-      return await doGenerate();
-    } catch (err) {
-      classifyProviderError(err);
-    }
-  },
-};

@@ -2,9 +2,21 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { APICallError } from "ai";
 import { TerminalError, RetryableError } from "@restatedev/restate-sdk";
-import { classifyProviderError, parseRetryAfterSeconds, AgentObject } from "../src/index.ts";
+import { ProviderErrorClassifier, AgentObject } from "../src/index.ts";
 import type { AgentObjectConfig, GenerateInput, GenerateOutput } from "../src/index.ts";
-import type { ObjectContext, ObjectSharedContext } from "@restatedev/restate-sdk";
+import type { ObjectContext } from "@restatedev/restate-sdk";
+
+// Expose protected methods for unit-testing the classifier internals.
+class TestClassifier extends ProviderErrorClassifier {
+  testParseRetryAfterSeconds(headers: Record<string, string> | undefined) {
+    return this.parseRetryAfterSeconds(headers);
+  }
+  testClassifyProviderError(err: unknown): never {
+    return this.classifyProviderError(err);
+  }
+}
+
+const classifier = new TestClassifier();
 
 type TestAgentConfig = AgentObjectConfig & { generate?: (input: GenerateInput) => Promise<GenerateOutput> };
 
@@ -25,23 +37,23 @@ class TestAgent extends AgentObject {
 // ---------------------------------------------------------------------------
 
 test("parseRetryAfterSeconds: numeric seconds string", () => {
-  assert.equal(parseRetryAfterSeconds({ "retry-after": "30" }), 30);
+  assert.equal(classifier.testParseRetryAfterSeconds({ "retry-after": "30" }), 30);
 });
 
 test("parseRetryAfterSeconds: zero seconds", () => {
-  assert.equal(parseRetryAfterSeconds({ "retry-after": "0" }), 0);
+  assert.equal(classifier.testParseRetryAfterSeconds({ "retry-after": "0" }), 0);
 });
 
 test("parseRetryAfterSeconds: case-insensitive header key", () => {
-  assert.equal(parseRetryAfterSeconds({ "Retry-After": "5" }), 5);
+  assert.equal(classifier.testParseRetryAfterSeconds({ "Retry-After": "5" }), 5);
 });
 
 test("parseRetryAfterSeconds: undefined headers returns undefined", () => {
-  assert.equal(parseRetryAfterSeconds(undefined), undefined);
+  assert.equal(classifier.testParseRetryAfterSeconds(undefined), undefined);
 });
 
 test("parseRetryAfterSeconds: missing header returns undefined", () => {
-  assert.equal(parseRetryAfterSeconds({}), undefined);
+  assert.equal(classifier.testParseRetryAfterSeconds({}), undefined);
 });
 
 // ---------------------------------------------------------------------------
@@ -57,7 +69,7 @@ test("classifyProviderError: 400 bad request → TerminalError", () => {
     responseBody: "",
   });
   assert.throws(
-    () => classifyProviderError(err),
+    () => classifier.testClassifyProviderError(err),
     (e: unknown) => e instanceof TerminalError
   );
 });
@@ -71,7 +83,7 @@ test("classifyProviderError: 401 unauthorized → TerminalError", () => {
     responseBody: "",
   });
   assert.throws(
-    () => classifyProviderError(err),
+    () => classifier.testClassifyProviderError(err),
     (e: unknown) => e instanceof TerminalError
   );
 });
@@ -85,7 +97,7 @@ test("classifyProviderError: 403 forbidden → TerminalError", () => {
     responseBody: "",
   });
   assert.throws(
-    () => classifyProviderError(err),
+    () => classifier.testClassifyProviderError(err),
     (e: unknown) => e instanceof TerminalError
   );
 });
@@ -103,7 +115,7 @@ test("classifyProviderError: 500 without Retry-After → RetryableError (no retr
     responseBody: "",
   });
   assert.throws(
-    () => classifyProviderError(err),
+    () => classifier.testClassifyProviderError(err),
     (e: unknown) => {
       assert.ok(e instanceof RetryableError);
       assert.equal((e as RetryableError).retryAfter, undefined);
@@ -122,7 +134,7 @@ test("classifyProviderError: 429 with Retry-After header → RetryableError with
     responseBody: "",
   });
   assert.throws(
-    () => classifyProviderError(err),
+    () => classifier.testClassifyProviderError(err),
     (e: unknown) => {
       assert.ok(e instanceof RetryableError);
       assert.deepEqual((e as RetryableError).retryAfter, { seconds: 10 });
@@ -140,7 +152,7 @@ test("classifyProviderError: 503 service unavailable → RetryableError", () => 
     responseBody: "",
   });
   assert.throws(
-    () => classifyProviderError(err),
+    () => classifier.testClassifyProviderError(err),
     (e: unknown) => e instanceof RetryableError
   );
 });
@@ -152,14 +164,14 @@ test("classifyProviderError: 503 service unavailable → RetryableError", () => 
 test("classifyProviderError: generic Error rethrown as-is", () => {
   const original = new Error("network timeout");
   assert.throws(
-    () => classifyProviderError(original),
+    () => classifier.testClassifyProviderError(original),
     (e: unknown) => e === original
   );
 });
 
 test("classifyProviderError: string error rethrown as-is", () => {
   assert.throws(
-    () => classifyProviderError("unexpected string error"),
+    () => classifier.testClassifyProviderError("unexpected string error"),
     (e: unknown) => e === "unexpected string error"
   );
 });
@@ -203,9 +215,6 @@ test("chat: TerminalError from generate → history not persisted (user can retr
     generate: async () => { throw new TerminalError("upstream error"); },
   });
 
-  // Start with no history so the fakeCtx.get returns null (not a mutable reference).
-  // In real Restate, ctx.get always deserializes a fresh copy, so in-memory mutations never
-  // escape without an explicit ctx.set. Here we verify ctx.set("history", ...) was never called.
   const ctx = fakeCtx();
   await agent.chat(ctx, { message: "hello" });
 

@@ -1,5 +1,5 @@
 import * as restate from "@restatedev/restate-sdk";
-import { AgentObject, type StepUsageReport, WebDeliveryAdapter, PubsubStreamAdapter, getModel, createMemoryAdapter } from "../../../../../packages/agent-core/src/index.ts";
+import { AgentObject, type StepUsageReport, WebDeliveryAdapter, PubsubStreamAdapter, LLMProvider, MemoryAdapter } from "../../../../../packages/agent-core/src/index.ts";
 import type { ObjectContext } from "@restatedev/restate-sdk";
 import { webSearchTool } from "../../tools/web-search/index";
 import { getDatetimeTool } from "../../../../../packages/agent-core/src/tools/datetime/index.ts";
@@ -25,10 +25,10 @@ class ManagerObject extends AgentObject {
     super({
       systemPrompt: "You are a helpful manager agent. Answer the user clearly and concisely.",
       tools,
-      model: getModel(),
+      model: LLMProvider.fromEnv().getModel(),
       delivery: new WebDeliveryAdapter(),
       stream: new PubsubStreamAdapter(),
-      memory: createMemoryAdapter(),
+      memory: MemoryAdapter.fromEnv(),
       onUsage: logUsage,
     });
   }

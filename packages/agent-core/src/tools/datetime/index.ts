@@ -4,7 +4,7 @@ import type { ObjectContext } from "@restatedev/restate-sdk";
 
 const inputSchema = z.object({});
 
-class GetDatetimeTool extends AgentTool<typeof inputSchema> {
+export class GetDatetimeTool extends AgentTool<typeof inputSchema> {
   readonly name = "get_datetime";
   readonly description = "Get the current date and time in ISO 8601 format.";
   readonly inputSchema = inputSchema;

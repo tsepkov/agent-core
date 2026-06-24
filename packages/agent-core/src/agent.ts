@@ -8,7 +8,7 @@ import { NoopDeliveryAdapter, NoopStreamAdapter } from "./delivery/index.ts";
 import type { AgentTool } from "./tool.ts";
 import type { DeliveryAdapter, DeliveryTarget, OutboxMessage, WireEvent } from "./delivery/index.ts";
 import type { StreamAdapter } from "./delivery/index.ts";
-import { errorClassifierMiddleware, LLM_RETRY_OPTIONS } from "./retry.ts";
+import { ProviderErrorClassifier, LLM_RETRY_OPTIONS } from "./retry.ts";
 import { MemoryAdapter } from "./memory.ts";
 
 /**
@@ -92,6 +92,12 @@ export interface AgentObjectConfig {
    * Never called for browser/pubsub delivery — usage never reaches the client.
    */
   onUsage?: (ctx: ObjectContext, report: StepUsageReport) => Promise<void>;
+  /**
+   * Error classification strategy for LLM provider calls.
+   * Defaults to `ProviderErrorClassifier`. Override to customise retry/terminal
+   * semantics for a specific provider (different header names, custom status codes, etc.).
+   */
+  errorClassifier?: ProviderErrorClassifier;
 }
 
 /** Structural contract restate.object() reads from its config argument. */
@@ -113,6 +119,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
   protected readonly memory: MemoryAdapter;
   protected readonly stream: StreamAdapter;
   protected readonly onUsage?: (ctx: ObjectContext, report: StepUsageReport) => Promise<void>;
+  protected readonly errorClassifier: ProviderErrorClassifier;
 
   protected constructor(config: AgentObjectConfig) {
     this.systemPrompt = config.systemPrompt ?? "";
@@ -123,6 +130,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
     this.memory = config.memory ?? MemoryAdapter.fromEnv();
     this.stream = config.stream ?? new NoopStreamAdapter();
     this.onUsage = config.onUsage;
+    this.errorClassifier = config.errorClassifier ?? new ProviderErrorClassifier();
   }
 
   // Restate does Object.entries(config.handlers) — getter returns only bound methods, not the full instance.
@@ -243,7 +251,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
   protected async durableGenerate({ ctx, model, system, messages, tools, maxSteps, emitToolEvent, onUsage }: GenerateInput): Promise<GenerateOutput> {
     const durableModel = wrapLanguageModel({
       model,
-      middleware: [durableCalls(ctx, LLM_RETRY_OPTIONS), errorClassifierMiddleware],
+      middleware: [durableCalls(ctx, LLM_RETRY_OPTIONS), this.errorClassifier.buildMiddleware()],
     });
     return generateText({
       model: durableModel,
