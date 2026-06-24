@@ -6,7 +6,7 @@
  */
 import { XMLParser } from "fast-xml-parser";
 import { z } from "zod";
-import { AgentTool } from "../../../../../packages/agent-core/src/tool/index.ts";
+import { AgentTool } from "../../../../../packages/agent-core/src/tool.ts";
 import type { ObjectContext } from "@restatedev/restate-sdk";
 
 /** Yandex Search API credentials (required only when the web_search tool is used). */

@@ -12,6 +12,6 @@
     "./memory": "./src/memory.ts",
     "./retry": "./src/retry.ts",
     "./tools/datetime": "./src/tools/datetime/index.ts",
-    "./tool": "./src/tool/index.ts"
+    "./tool": "./src/tool.ts"
   }
 }

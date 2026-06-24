@@ -5,7 +5,7 @@ import type { ModelMessage, ToolSet } from "ai";
 import type { LanguageModelV3 } from "@ai-sdk/provider";
 import { durableCalls } from "@restatedev/vercel-ai-middleware";
 import { NoopDeliveryAdapter, NoopStreamAdapter } from "./delivery/index.ts";
-import type { AgentTool } from "./tool/index.ts";
+import type { AgentTool } from "./tool.ts";
 import type { DeliveryAdapter, DeliveryTarget, OutboxMessage, WireEvent } from "./delivery/index.ts";
 import type { StreamAdapter } from "./delivery/index.ts";
 import { errorClassifierMiddleware, LLM_RETRY_OPTIONS } from "./retry.ts";

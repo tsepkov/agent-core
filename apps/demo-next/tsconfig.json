@@ -21,7 +21,7 @@
     "incremental": true,
     "paths": {
       "@/*": [
-        "./apps/demo-next/src/*"
+        "./src/*"
       ]
     },
     "plugins": [
@@ -31,14 +31,13 @@
     ]
   },
   "include": [
-    "apps/demo-next/src/**/*.js",
-    "apps/demo-next/src/**/*.jsx",
-    "apps/demo-next/src/**/*.ts",
-    "apps/demo-next/src/**/*.tsx",
-    "apps/demo-next/test/**/*.ts",
-    "apps/demo-next/next-env.d.ts",
-    "packages/agent-core/src/**/*.ts",
-    "packages/agent-core/test/**/*.ts"
+    "next-env.d.ts",
+    "src/**/*.js",
+    "src/**/*.jsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "test/**/*.ts",
+    ".next/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"
