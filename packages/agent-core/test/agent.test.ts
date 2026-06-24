@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { AgentObject } from "../src/core/index.ts";
+import { AgentObject } from "../src/index.ts";
 import type { ObjectContext } from "@restatedev/restate-sdk";
 import type { ModelMessage, ToolSet } from "ai";
-import type { AgentTool, AgentObjectConfig, GenerateInput, GenerateOutput } from "../src/core/index.ts";
+import type { AgentTool, AgentObjectConfig, GenerateInput, GenerateOutput } from "../src/index.ts";
 
 type TestAgentConfig = AgentObjectConfig & { generate?: (input: GenerateInput) => Promise<GenerateOutput> };
 

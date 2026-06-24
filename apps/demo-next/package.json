@@ -1,5 +1,5 @@
 {
-  "name": "agent-scaffold",
+  "name": "demo-next",
   "version": "0.1.0",
   "description": "Abstract durable-agent scaffold (Restate + Vercel AI SDK). Fork to build use-cases.",
   "type": "module",
@@ -15,6 +15,7 @@
     "@assistant-ui/react": "^0.14.23",
     "@assistant-ui/react-markdown": "^0.14.4",
     "@base-ui/react": "^1.6.0",
+    "@agent-scaffold/agent-core": "workspace:*",
     "@openrouter/ai-sdk-provider": "2.9.1",
     "@radix-ui/react-collapsible": "^1.1.14",
     "@radix-ui/react-use-controllable-state": "^1.2.3",

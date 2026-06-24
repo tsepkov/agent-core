@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { NoopDeliveryAdapter, WebDeliveryAdapter, DeliveryAdapter } from "../src/core/delivery/index.ts";
-import type { DeliveryPayload } from "../src/core/delivery/index.ts";
+import { NoopDeliveryAdapter, WebDeliveryAdapter, DeliveryAdapter } from "../src/delivery/index.ts";
+import type { DeliveryPayload } from "../src/delivery/index.ts";
 import type { ObjectContext } from "@restatedev/restate-sdk";
 
 test("NoopDeliveryAdapter.deliver resolves without throwing", async () => {

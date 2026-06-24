@@ -1,0 +1,12 @@
+{
+  "name": "agent-scaffold-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --dir apps/demo-next dev",
+    "build": "pnpm --dir apps/demo-next build",
+    "start": "pnpm --dir apps/demo-next start",
+    "test": "node --test",
+    "typecheck": "tsc --noEmit"
+  }
+}

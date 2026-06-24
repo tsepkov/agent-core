@@ -1,6 +1,6 @@
 # Local development stack — source-only, no build step.
 #
-#   1. npm install --legacy-peer-deps  # once, on the host
+#   1. pnpm install                    # once, on the host
 #   2. cp .env.example .env            # add your OPENROUTER_API_KEY
 #   3. docker compose up
 #
@@ -37,9 +37,9 @@ services:
   # node_modules are bind-mounted from the host (installed once with npm install).
   app:
     image: node:22-slim
-    working_dir: /app
+    working_dir: /app/apps/demo-next
     command: >-
-      node_modules/.bin/next dev --turbopack -H 0.0.0.0
+      /app/node_modules/.bin/next dev --turbopack -H 0.0.0.0
     environment:
       NODE_ENV: development
       NODE_OPTIONS: "--inspect=0.0.0.0:9229"

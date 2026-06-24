@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { z } from "zod";
-import { AgentTool } from "../src/core/tool/index.ts";
+import { AgentTool } from "../src/tool/index.ts";
 import type { ObjectContext } from "@restatedev/restate-sdk";
 import type { ToolExecutionOptions } from "ai";
 

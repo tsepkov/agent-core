@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveModelId } from "../src/core/index.ts";
+import { resolveModelId } from "../src/index.ts";
 
 test("resolveModelId honors OPENROUTER_MODEL override", () => {
   const prev = process.env.OPENROUTER_MODEL;

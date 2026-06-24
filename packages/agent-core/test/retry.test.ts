@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { APICallError } from "ai";
 import { TerminalError, RetryableError } from "@restatedev/restate-sdk";
-import { classifyProviderError, parseRetryAfterSeconds, AgentObject } from "../src/core/index.ts";
-import type { AgentObjectConfig, GenerateInput, GenerateOutput } from "../src/core/index.ts";
+import { classifyProviderError, parseRetryAfterSeconds, AgentObject } from "../src/index.ts";
+import type { AgentObjectConfig, GenerateInput, GenerateOutput } from "../src/index.ts";
 import type { ObjectContext, ObjectSharedContext } from "@restatedev/restate-sdk";
 
 type TestAgentConfig = AgentObjectConfig & { generate?: (input: GenerateInput) => Promise<GenerateOutput> };

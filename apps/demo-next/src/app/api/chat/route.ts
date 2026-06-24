@@ -23,15 +23,18 @@ export async function POST(req: Request): Promise<Response> {
   const topic = idempotencyKey;
 
   const ingress = connect({ url: INGRESS });
-  await ingress.objectSendClient(manager, sessionId).chat(
-    {
+  await ingress.send({
+    service: manager.name,
+    handler: "chat",
+    key: sessionId,
+    parameter: {
       message: message?.trim() ?? "",
       files: files?.length ? files : undefined,
       replyTo: { channel: "web", address: topic },
       userId: userId ?? sessionId,
     },
-    rpc.sendOpts({ idempotencyKey }),
-  );
+    opts: rpc.sendOpts({ idempotencyKey }),
+  });
 
   return Response.json({ topic });
 }

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AgentTool } from "../../core/tool/index.ts";
+import { AgentTool } from "../../tool/index.ts";
 import type { ObjectContext } from "@restatedev/restate-sdk";
 
 const inputSchema = z.object({});

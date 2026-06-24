@@ -11,7 +11,7 @@ import {
   type CompleteAttachment,
 } from "@assistant-ui/react";
 import { createPubsubClient } from "@restatedev/pubsub-client";
-import type { WireEvent } from "@/core/delivery";
+import type { WireEvent } from "../../../../packages/agent-core/src/delivery/index.ts";
 import { getOrCreateUserId } from "@/lib/sessions";
 import { compositeAttachmentAdapter } from "@/lib/attachmentAdapter";
 

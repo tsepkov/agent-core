@@ -1,0 +1,17 @@
+{
+  "name": "@agent-scaffold/agent-core",
+  "version": "0.1.0",
+  "description": "Reusable durable-agent runtime core extracted from the Next.js demo app.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./agent": "./src/agent.ts",
+    "./delivery": "./src/delivery/index.ts",
+    "./llm": "./src/llm.ts",
+    "./memory": "./src/memory.ts",
+    "./retry": "./src/retry.ts",
+    "./tools/datetime": "./src/tools/datetime/index.ts",
+    "./tool": "./src/tool/index.ts"
+  }
+}

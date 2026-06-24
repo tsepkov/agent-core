@@ -1,12 +1,8 @@
 import * as restate from "@restatedev/restate-sdk";
-import { AgentObject } from "@/core/agent";
-import type { StepUsageReport } from "@/core/agent";
+import { AgentObject, type StepUsageReport, WebDeliveryAdapter, PubsubStreamAdapter, getModel, createMemoryAdapter } from "../../../../../packages/agent-core/src/index.ts";
 import type { ObjectContext } from "@restatedev/restate-sdk";
-import { WebDeliveryAdapter, PubsubStreamAdapter } from "@/core/delivery";
-import { getModel } from "@/core/llm";
-import { createMemoryAdapter } from "@/core/memory";
-import { webSearchTool } from "@/tools/web-search/index";
-import { getDatetimeTool } from "@/tools/datetime/index";
+import { webSearchTool } from "../../tools/web-search/index";
+import { getDatetimeTool } from "../../../../../packages/agent-core/src/tools/datetime/index.ts";
 
 const tools = [webSearchTool, getDatetimeTool];
 
