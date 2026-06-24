@@ -185,8 +185,8 @@ function DefaultToolCall({ toolName, args, result, isError }: ToolCallPart) {
             hasOutput
               ? isError
                 ? "text-destructive"
-                : "text-green-600 dark:text-green-500"
-              : "text-yellow-600 dark:text-yellow-500",
+                : "text-success"
+              : "text-warning",
           )}
         >
           {hasOutput ? (isError ? "error" : "done") : "running…"}
@@ -220,7 +220,7 @@ function DefaultToolCall({ toolName, args, result, isError }: ToolCallPart) {
 function UserMessage() {
   return (
     <MessagePrimitive.Root className="flex justify-end w-full mb-6">
-      <div className="max-w-[80%] flex flex-col items-end gap-2">
+      <div className="max-w-4/5 flex flex-col items-end gap-2">
         {/* Attached images above the text bubble */}
         <MessagePrimitive.Attachments>
           {() => (
