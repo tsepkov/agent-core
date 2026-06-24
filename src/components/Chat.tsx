@@ -1,40 +1,44 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { AssistantRuntimeProvider, useAuiState } from "@assistant-ui/react";
-import type { ThreadMessageLike } from "@assistant-ui/react";
+import { useMemo } from "react";
+import { AssistantRuntimeProvider, useRemoteThreadListRuntime } from "@assistant-ui/react";
 import { Thread } from "@/components/assistant-ui/thread";
+import { ThreadList } from "@/components/assistant-ui/thread-list";
 import { useRestateRuntime } from "@/hooks/useRestateRuntime";
-import { readMessages, writeMessages } from "@/lib/sessions";
+import { createThreadListAdapter } from "@/lib/threadListAdapter";
 
 // ---------------------------------------------------------------------------
-// Session persistence — syncs assistant-ui thread state to localStorage.
-// Must live inside AssistantRuntimeProvider to access runtime context.
+// Chat — wires RemoteThreadListRuntime (localStorage adapter + Restate pubsub)
+// and renders the sidebar + thread panel.
+//
+// Thread persistence (history) is handled by the createLocalStorageAdapter
+// injected into useRemoteThreadListRuntime via its unstable_Provider —
+// no manual SessionPersist / writeMessages needed.
+//
+// In maxbot, swap createThreadListAdapter() for a Turso/API-backed adapter;
+// useRestateRuntime stays as-is.
 // ---------------------------------------------------------------------------
 
-function SessionPersist({ sessionId }: { sessionId: string }) {
-  const messages = useAuiState((s) => s.thread.messages);
-  useEffect(() => {
-    // MessageState[] satisfies ThreadMessageLike[] for serialisation purposes.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    writeMessages(sessionId, messages as any);
-  }, [sessionId, messages]);
-  return null;
-}
+export function Chat() {
+  // Stable adapter instance — recreated only on remount.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const adapter = useMemo(() => createThreadListAdapter(), []);
 
-// ---------------------------------------------------------------------------
-// Chat — wires LocalRuntime (Restate pubsub transport) and renders the thread.
-// ---------------------------------------------------------------------------
-
-export function Chat({ sessionId }: { sessionId: string }) {
-  // Load persisted messages once on mount; don't re-derive on subsequent renders.
-  const [initialMessages] = useState<ThreadMessageLike[]>(() => readMessages(sessionId));
-  const runtime = useRestateRuntime({ sessionId, initialMessages });
+  const runtime = useRemoteThreadListRuntime({
+    // runtimeHook is called per-thread inside RemoteThreadListRuntime.
+    // It reads its sessionId from useThreadListItemRuntime().initialize().
+    runtimeHook: useRestateRuntime,
+    adapter,
+  });
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <SessionPersist sessionId={sessionId} />
-      <Thread />
+      <div className="flex h-screen overflow-hidden">
+        <ThreadList />
+        <main className="flex-1 min-w-0 flex flex-col p-4 overflow-hidden">
+          <Thread />
+        </main>
+      </div>
     </AssistantRuntimeProvider>
   );
 }

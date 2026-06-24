@@ -1,15 +1,21 @@
 "use client";
 
-import { useMemo } from "react";
-import { useLocalRuntime, type ChatModelAdapter, type ThreadMessageLike } from "@assistant-ui/react";
-import type { ThreadAssistantMessagePart } from "@assistant-ui/react";
+import { useRef } from "react";
+import {
+  useLocalRuntime,
+  useThreadListItemRuntime,
+  type AssistantRuntime,
+  type ChatModelAdapter,
+  type ThreadListItemRuntime,
+  type ThreadAssistantMessagePart,
+} from "@assistant-ui/react";
 import { createPubsubClient } from "@restatedev/pubsub-client";
 import type { WireEvent } from "@/core/delivery";
 import { getOrCreateUserId } from "@/lib/sessions";
 
 const INGRESS = process.env.NEXT_PUBLIC_RESTATE_INGRESS_URL ?? "http://localhost:8080";
 
-function makeRestateAdapter(sessionId: string): ChatModelAdapter {
+function makeRestateAdapter(threadListItemRef: { current: ThreadListItemRuntime | null }): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
       // Extract text from the last user message in the thread.
@@ -19,10 +25,16 @@ function makeRestateAdapter(sessionId: string): ChatModelAdapter {
         .map((p) => p.text)
         .join("");
 
+      // Use the thread's stable remoteId as the Restate session key.
+      // initialize() is idempotent — returns the same remoteId on every call.
+      const threadListItem = threadListItemRef.current;
+      if (!threadListItem) throw new Error("ThreadListItemRuntime not available");
+      const { remoteId: sessionId } = await threadListItem.initialize();
+
       const messageId = crypto.randomUUID();
       const userId = getOrCreateUserId();
 
-      // Dispatch to Restate via BFF — same route as before, returns { topic }.
+      // Dispatch to Restate via BFF — returns { topic }.
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -84,23 +96,24 @@ function makeRestateAdapter(sessionId: string): ChatModelAdapter {
 /**
  * Wraps the Restate pubsub transport as a LocalRuntime ChatModelAdapter.
  *
- * Drop-in replacement for usePubsubChat:
- *   - POST /api/chat → Restate ingress (idempotent, same route as before)
- *   - Pull WireEvents from Restate pubsub (no SSE proxy, directly from browser)
- *   - Yield ChatModelRunResult snapshots → assistant-ui manages thread state
+ * Called as `runtimeHook` inside useRemoteThreadListRuntime — no props needed.
+ * Session ID comes from the current thread's remoteId (stable across reloads),
+ * which maps to the same Restate Virtual Object so durable runs continue.
  *
- * Durability (Restate replay) is entirely server-side; this hook is pure UI.
- * Does not import any type from 'ai' — keeps WireEvent as the only boundary.
+ * History (message persistence) is handled by the thread-list adapter's
+ * ThreadHistoryAdapter; this hook only drives the live pubsub transport.
  */
-export function useRestateRuntime({
-  sessionId,
-  initialMessages,
-}: {
-  sessionId: string;
-  initialMessages: ThreadMessageLike[];
-}) {
-  // Stable adapter — recreated only when sessionId changes (session switch).
-  const adapter = useMemo(() => makeRestateAdapter(sessionId), [sessionId]);
-  // useLocalRuntime(chatModel, options) — model is the first argument, not { model }.
-  return useLocalRuntime(adapter, { initialMessages });
+export function useRestateRuntime(): AssistantRuntime {
+  // Capture the current ThreadListItemRuntime in a ref so the adapter closure
+  // (created once via useMemo inside useLocalRuntime) can read the latest value.
+  const threadListItem = useThreadListItemRuntime();
+  const threadListItemRef = useRef<ThreadListItemRuntime | null>(null);
+  threadListItemRef.current = threadListItem;
+
+  const adapterRef = useRef<ChatModelAdapter | null>(null);
+  if (!adapterRef.current) {
+    adapterRef.current = makeRestateAdapter(threadListItemRef);
+  }
+
+  return useLocalRuntime(adapterRef.current);
 }
