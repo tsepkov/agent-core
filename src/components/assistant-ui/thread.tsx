@@ -11,7 +11,13 @@ import {
   useAuiState,
   useAttachment,
   useMessageTiming,
+  groupPartByType,
 } from "@assistant-ui/react";
+import {
+  ToolGroupRoot,
+  ToolGroupTrigger,
+  ToolGroupContent,
+} from "@/components/assistant-ui/tool-group";
 import {
   Collapsible,
   CollapsibleContent,
@@ -250,12 +256,21 @@ function AssistantMessage() {
         {/* Thinking/Thought timer — always rendered so non-thinking models show feedback */}
         <ThinkingIndicator />
 
-        <MessagePrimitive.Parts>
-          {({ part }) => {
+        <MessagePrimitive.GroupedParts
+          groupBy={groupPartByType({ "tool-call": ["group-tool"] })}
+        >
+          {({ part, children }) => {
             switch (part.type) {
-              case "reasoning":
-                // Handled by ThinkingIndicator above.
-                return null;
+              case "group-tool":
+                return (
+                  <ToolGroupRoot>
+                    <ToolGroupTrigger
+                      count={part.indices.length}
+                      active={part.status.type === "running"}
+                    />
+                    <ToolGroupContent>{children}</ToolGroupContent>
+                  </ToolGroupRoot>
+                );
 
               case "tool-call": {
                 const p = part as unknown as ToolCallPart;
@@ -265,11 +280,15 @@ function AssistantMessage() {
               case "text":
                 return <Streamdown plugins={streamdownPlugins}>{part.text}</Streamdown>;
 
+              case "reasoning":
+                // Handled by ThinkingIndicator above.
+                return null;
+
               default:
                 return null;
             }
           }}
-        </MessagePrimitive.Parts>
+        </MessagePrimitive.GroupedParts>
 
         <MessagePrimitive.Error>
           <p className="text-sm text-destructive">Ошибка при генерации ответа.</p>
