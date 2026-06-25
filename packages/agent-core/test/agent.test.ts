@@ -3,18 +3,28 @@ import assert from "node:assert/strict";
 import { AgentObject } from "../src/index.ts";
 import type { ObjectContext } from "@restatedev/restate-sdk";
 import type { ModelMessage, ToolSet } from "ai";
-import type { AgentTool, AgentObjectConfig, GenerateInput, GenerateOutput } from "../src/index.ts";
+import type { AgentTool, AgentObjectConfig, GenerateInput, LoopResult } from "../src/index.ts";
 
-type TestAgentConfig = AgentObjectConfig & { generate?: (input: GenerateInput) => Promise<GenerateOutput> };
+const DEFAULT_USAGE: LoopResult["usage"] = {
+  promptTokens: 0,
+  completionTokens: 0,
+  totalTokens: 0,
+  costUsd: 0,
+  model: "test",
+};
+
+type TestAgentConfig = AgentObjectConfig & { generate?: (input: GenerateInput) => Promise<LoopResult> };
 
 class TestAgent extends AgentObject {
   readonly name = "test";
-  readonly #stub?: (input: GenerateInput) => Promise<GenerateOutput>;
+  readonly #stub?: (input: GenerateInput) => Promise<LoopResult>;
   constructor({ generate, ...rest }: TestAgentConfig) {
     super(rest);
     this.#stub = generate;
   }
-  protected override durableGenerate(input: GenerateInput) {
+  // Stub resolveModel so tests don't need to supply a real LanguageModelV3.
+  protected override resolveModel() { return {} as never; }
+  protected override runLoop(input: GenerateInput) {
     return this.#stub!(input);
   }
 }
@@ -44,14 +54,15 @@ function fakeCtx(overrides: object = {}): ObjectContext {
 type StubText = string | ((args: { messages: ModelMessage[] }) => string);
 
 function stubGenerate(text: StubText = "hello there", messages?: ModelMessage[]) {
-  return async (args: { messages: ModelMessage[] }): Promise<GenerateOutput> => ({
+  return async (args: { messages: ModelMessage[] }): Promise<LoopResult> => ({
     text: typeof text === "function" ? text(args) : text,
     response: { messages: messages ?? [{ role: "assistant", content: "ok" }] },
+    usage: DEFAULT_USAGE,
   });
 }
 
 test("chat returns a messageId and persists history", async () => {
-  const agent = new TestAgent({ model: {} as never, generate: stubGenerate("hello there") });
+  const agent = new TestAgent({ generate: stubGenerate("hello there") });
 
   const ctx = fakeCtx();
   const res = await agent.chat(ctx, { message: "hi" });
@@ -68,7 +79,6 @@ test("chat returns a messageId and persists history", async () => {
 test("chat pushes the reply through the delivery adapter", async () => {
   const delivered: Array<{ target?: unknown; message: unknown }> = [];
   const agent = new TestAgent({
-    model: {} as never,
     generate: stubGenerate("done"),
     delivery: { deliver: async (_ctx: unknown, payload: unknown) => { delivered.push(payload as never); } },
   });
@@ -82,7 +92,6 @@ test("chat pushes the reply through the delivery adapter", async () => {
 
 test("chat accumulates history across turns", async () => {
   const agent = new TestAgent({
-    model: {} as never,
     generate: stubGenerate(({ messages }) => `turn-${messages.filter((m) => m.role === "user").length}`),
   });
 
@@ -104,11 +113,10 @@ test("chat binds tools to the context and passes them to generate", async () => 
   } as unknown as AgentTool;
 
   const agent = new TestAgent({
-    model: {} as never,
     tools: [echoTool],
-    generate: async ({ tools }: GenerateInput): Promise<GenerateOutput> => {
+    generate: async ({ tools }: GenerateInput): Promise<LoopResult> => {
       passedTools = tools;
-      return { text: "done", response: { messages: [] } };
+      return { text: "done", response: { messages: [] }, usage: DEFAULT_USAGE };
     },
   });
 
@@ -122,7 +130,7 @@ test("chat binds tools to the context and passes them to generate", async () => 
 });
 
 test("reset clears history", async () => {
-  const agent = new TestAgent({ model: {} as never, generate: stubGenerate() });
+  const agent = new TestAgent({ generate: stubGenerate() });
   const ctx = fakeCtx();
   const state = (ctx as unknown as { _state: Map<string, unknown> })._state;
   state.set("history", [{ role: "user", content: "x" }]);

@@ -53,6 +53,37 @@ export interface AgentHandlers {
   reset(ctx: ObjectContext): Promise<{ ok: boolean }>;
 }
 
+/**
+ * Aggregated result returned by {@link AgentObject.runLoop}.
+ * Includes the full text reply, optional reasoning, the AI SDK message history
+ * for the completed steps, and usage totals accumulated across all steps.
+ */
+export interface LoopResult {
+  text: string;
+  reasoningText?: string;
+  response: { messages: ModelMessage[] };
+  /** Usage totals accumulated across every step in the loop. */
+  usage: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    /** Sum of provider-reported USD cost across all steps (0 when provider omits cost). */
+    costUsd: number;
+    /** Model id reported by the provider on the last step. */
+    model: string;
+  };
+}
+
+/**
+ * Minimal generate result shape used by {@link AgentObject.onAfterGenerate}.
+ * A subset of {@link LoopResult} kept for backward compatibility.
+ */
+export interface GenerateOutput {
+  text: string;
+  reasoningText?: string;
+  response: { messages: ModelMessage[] };
+}
+
 export interface GenerateInput {
   ctx: ObjectContext;
   model: LanguageModelV3;
@@ -64,16 +95,14 @@ export interface GenerateInput {
   onUsage?: (ctx: ObjectContext, report: StepUsageReport) => Promise<void>;
 }
 
-export interface GenerateOutput {
-  text: string;
-  reasoningText?: string;
-  response: { messages: ModelMessage[] };
-}
-
 export interface AgentObjectConfig {
   systemPrompt?: string;
   tools?: AgentTool[];
-  model: LanguageModelV3;
+  /**
+   * Base language model. Optional when the subclass overrides {@link AgentObject.resolveModel}.
+   * Required otherwise — the base resolveModel throws if this is absent.
+   */
+  model?: LanguageModelV3;
   maxSteps?: number;
   delivery?: DeliveryAdapter;
   memory?: MemoryAdapter;
@@ -113,7 +142,7 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
 
   protected readonly systemPrompt: string;
   protected readonly tools: AgentTool[];
-  protected readonly model: LanguageModelV3;
+  protected readonly model?: LanguageModelV3;
   protected readonly maxSteps: number;
   protected readonly delivery: DeliveryAdapter;
   protected readonly memory: MemoryAdapter;
@@ -136,6 +165,29 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
   // Restate does Object.entries(config.handlers) — getter returns only bound methods, not the full instance.
   get handlers(): AgentHandlers {
     return { chat: this.chat.bind(this), reset: this.reset.bind(this) };
+  }
+
+  /**
+   * Resolve the language model for this request.
+   * Base implementation returns the model from config; throws if none was provided.
+   * Override to select the model dynamically per-request (e.g. from a registry + user credentials).
+   */
+  protected resolveModel(_ctx: ObjectContext, _req: ChatRequest): LanguageModelV3 {
+    if (!this.model) {
+      throw new Error(
+        "AgentObject: no model configured. Either pass model in AgentObjectConfig or override resolveModel().",
+      );
+    }
+    return this.model;
+  }
+
+  /**
+   * Return the tools available for this request.
+   * Base implementation returns the tools from config.
+   * Override to inject per-request context (credentials, ids, accumulators) into tool instances.
+   */
+  protected buildTools(_ctx: ObjectContext, _req: ChatRequest): AgentTool[] {
+    return this.tools;
   }
 
   /**
@@ -200,14 +252,18 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
 
     const emitToolEvent = (event: WireEvent) => this.stream.emit(ctx, replyTo, event);
 
+    const model = this.resolveModel(ctx, req);
+    const toolInstances = this.buildTools(ctx, req);
+    const tools = Object.fromEntries(toolInstances.map((t) => [t.name, t.build(ctx)])) as ToolSet;
+
     let replyContent = "";
     try {
-      const output = await this.durableGenerate({
+      const output = await this.runLoop({
         ctx,
-        model: this.model,
+        model,
         system: this.systemPrompt,
         messages: messagesWithMemory,
-        tools: Object.fromEntries(this.tools.map((t) => [t.name, t.build(ctx)])) as ToolSet,
+        tools,
         maxSteps: this.maxSteps,
         emitToolEvent,
         onUsage: this.onUsage,
@@ -248,12 +304,40 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
     return { ok: true };
   }
 
-  protected async durableGenerate({ ctx, model, system, messages, tools, maxSteps, emitToolEvent, onUsage }: GenerateInput): Promise<GenerateOutput> {
+  /**
+   * Run the durable multi-step LLM loop using the Vercel AI SDK + Restate durableCalls.
+   *
+   * Each LLM call is checkpointed as a Restate journal entry via the durableCalls middleware.
+   * Tool executions are checkpointed inside AgentTool.build via ctx.run.
+   * The loop continues until the model produces a final text reply or maxSteps is reached.
+   *
+   * Returns a {@link LoopResult} with the reply text and usage totals accumulated across all
+   * steps — use these for billing, logging, and history persistence.
+   *
+   * Override this method in tests to inject a stub instead of hitting a real LLM.
+   */
+  protected async runLoop({
+    ctx,
+    model,
+    system,
+    messages,
+    tools,
+    maxSteps,
+    emitToolEvent,
+    onUsage,
+  }: GenerateInput): Promise<LoopResult> {
     const durableModel = wrapLanguageModel({
       model,
       middleware: [durableCalls(ctx, LLM_RETRY_OPTIONS), this.errorClassifier.buildMiddleware()],
     });
-    return generateText({
+
+    // Accumulate usage totals across steps for the returned LoopResult.
+    let totalPromptTokens = 0;
+    let totalCompletionTokens = 0;
+    let totalCostUsd = 0;
+    let lastModelId = "";
+
+    const result = await generateText({
       model: durableModel,
       system,
       messages,
@@ -263,38 +347,44 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
       providerOptions: {
         openrouter: { usage: { include: true } },
       },
-      onStepFinish: onUsage
-        ? async (step) => {
-            // Build tool call counts for this step.
-            const toolCountMap = new Map<string, number>();
-            for (const tc of step.toolCalls) {
-              toolCountMap.set(tc.toolName, (toolCountMap.get(tc.toolName) ?? 0) + 1);
-            }
-            const stepTools = Array.from(toolCountMap.entries()).map(([name, calls]) => ({ name, calls }));
+      onStepFinish: async (step) => {
+        // Extract provider-reported cost (OpenRouter sets providerMetadata.openrouter.usage.cost).
+        const openrouterMeta = step.providerMetadata?.openrouter as
+          | { usage?: { cost?: number } }
+          | undefined;
+        const costUsd = openrouterMeta?.usage?.cost ?? 0;
 
-            // Extract provider-reported cost (OpenRouter sets providerMetadata.openrouter.usage.cost).
-            const openrouterMeta = step.providerMetadata?.openrouter as
-              | { usage?: { cost?: number } }
-              | undefined;
-            const costUsd = openrouterMeta?.usage?.cost ?? 0;
+        // Accumulate for LoopResult.usage.
+        totalPromptTokens += step.usage.inputTokens ?? 0;
+        totalCompletionTokens += step.usage.outputTokens ?? 0;
+        totalCostUsd += costUsd;
+        lastModelId = step.model?.modelId ?? lastModelId;
 
-            const report: StepUsageReport = {
-              step: step.stepNumber,
-              llm: {
-                // AI SDK v6 renamed promptTokens→inputTokens, completionTokens→outputTokens.
-                // We normalise to the conventional names used by billing callers.
-                promptTokens: step.usage.inputTokens ?? 0,
-                completionTokens: step.usage.outputTokens ?? 0,
-                totalTokens: step.usage.totalTokens ?? 0,
-                costUsd,
-                model: step.model.modelId,
-              },
-              tools: stepTools,
-            };
-
-            await onUsage(ctx, report);
+        // Fire per-step callback when provided (e.g. for real-time billing or logging).
+        if (onUsage) {
+          const toolCountMap = new Map<string, number>();
+          for (const tc of step.toolCalls) {
+            toolCountMap.set(tc.toolName, (toolCountMap.get(tc.toolName) ?? 0) + 1);
           }
-        : undefined,
+          const stepTools = Array.from(toolCountMap.entries()).map(([name, calls]) => ({ name, calls }));
+
+          const report: StepUsageReport = {
+            step: step.stepNumber,
+            llm: {
+              // AI SDK v6 renamed promptTokens→inputTokens, completionTokens→outputTokens.
+              // We normalise to the conventional names used by billing callers.
+              promptTokens: step.usage.inputTokens ?? 0,
+              completionTokens: step.usage.outputTokens ?? 0,
+              totalTokens: step.usage.totalTokens ?? 0,
+              costUsd,
+              model: step.model?.modelId ?? "",
+            },
+            tools: stepTools,
+          };
+
+          await onUsage(ctx, report);
+        }
+      },
       experimental_onToolCallStart: ({ toolCall }) => {
         emitToolEvent({
           kind: "tool-input",
@@ -322,5 +412,18 @@ export abstract class AgentObject implements RestateVirtualObjectConfig {
         }
       },
     });
+
+    return {
+      text: result.text,
+      reasoningText: result.reasoning ?? undefined,
+      response: result.response,
+      usage: {
+        promptTokens: totalPromptTokens,
+        completionTokens: totalCompletionTokens,
+        totalTokens: totalPromptTokens + totalCompletionTokens,
+        costUsd: totalCostUsd,
+        model: lastModelId,
+      },
+    };
   }
 }

@@ -38,11 +38,14 @@ export class NoopDeliveryAdapter extends DeliveryAdapter {
  * Base for adapters that publish to a Restate pubsub topic keyed by channel address.
  * Encapsulates publisher construction and the web-channel topic resolution that
  * WebDeliveryAdapter and PubsubStreamAdapter both need.
+ *
+ * Extends {@link DeliveryAdapter} so subclasses satisfy `instanceof DeliveryAdapter`.
  */
-export abstract class PubsubChannelBase {
+export abstract class PubsubChannelBase extends DeliveryAdapter {
   protected readonly publish: ReturnType<typeof createPubsubPublisher>;
 
   constructor(pubsubName = "pubsub") {
+    super();
     this.publish = createPubsubPublisher(pubsubName);
   }
 

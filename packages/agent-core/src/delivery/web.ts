@@ -2,7 +2,7 @@ import type { ObjectContext } from "@restatedev/restate-sdk";
 import { DeliveryAdapter, PubsubChannelBase } from "./base.ts";
 import type { DeliveryPayload, WireEvent } from "./base.ts";
 
-export class WebDeliveryAdapter extends PubsubChannelBase implements DeliveryAdapter {
+export class WebDeliveryAdapter extends PubsubChannelBase {
   async deliver(ctx: ObjectContext, { target, message }: DeliveryPayload): Promise<void> {
     const topic = this.resolveWebTopic(target);
     if (!topic) return;

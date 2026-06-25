@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { APICallError } from "ai";
 import { TerminalError, RetryableError } from "@restatedev/restate-sdk";
 import { ProviderErrorClassifier, AgentObject } from "../src/index.ts";
-import type { AgentObjectConfig, GenerateInput, GenerateOutput } from "../src/index.ts";
+import type { AgentObjectConfig, GenerateInput, LoopResult } from "../src/index.ts";
 import type { ObjectContext } from "@restatedev/restate-sdk";
 
 // Expose protected methods for unit-testing the classifier internals.
@@ -18,16 +18,22 @@ class TestClassifier extends ProviderErrorClassifier {
 
 const classifier = new TestClassifier();
 
-type TestAgentConfig = AgentObjectConfig & { generate?: (input: GenerateInput) => Promise<GenerateOutput> };
+const DEFAULT_USAGE: LoopResult["usage"] = {
+  promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, model: "test",
+};
+
+type TestAgentConfig = AgentObjectConfig & { generate?: (input: GenerateInput) => Promise<LoopResult> };
 
 class TestAgent extends AgentObject {
   readonly name = "test";
-  readonly #stub?: (input: GenerateInput) => Promise<GenerateOutput>;
+  readonly #stub?: (input: GenerateInput) => Promise<LoopResult>;
   constructor({ generate, ...rest }: TestAgentConfig) {
     super(rest);
     this.#stub = generate;
   }
-  protected override durableGenerate(input: GenerateInput) {
+  // Stub resolveModel so tests don't need to supply a real LanguageModelV3.
+  protected override resolveModel() { return {} as never; }
+  protected override runLoop(input: GenerateInput) {
     return this.#stub!(input);
   }
 }
