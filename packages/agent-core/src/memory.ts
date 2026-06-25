@@ -17,7 +17,7 @@ import MemoryClient from "mem0ai";
  *   Future:   MEMORY_BACKEND=mem0-oss
  *             → Mem0OssMemoryAdapter using mem0ai/oss with a Qdrant-compatible vector store.
  *             YDB exposes a Qdrant-compatible layer — point the Qdrant driver at YDB to keep
- *             everything in a single database already used by maxbot.
+ *             everything in a single shared database.
  *   The remember/recall interface does NOT change on migration; only the adapter and config do.
  *   Durability is each adapter's responsibility: wrap side-effecting calls in ctx.run so that
  *   Restate replay does not cause double-writes (see Mem0HostedMemoryAdapter below).

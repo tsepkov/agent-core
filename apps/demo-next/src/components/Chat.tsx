@@ -15,7 +15,7 @@ import { createThreadListAdapter } from "@/lib/threadListAdapter";
 // injected into useRemoteThreadListRuntime via its unstable_Provider —
 // no manual SessionPersist / writeMessages needed.
 //
-// In maxbot, swap createThreadListAdapter() for a Turso/API-backed adapter;
+// In production, swap createThreadListAdapter() for a Turso/API-backed adapter;
 // useRestateRuntime stays as-is.
 // ---------------------------------------------------------------------------
 
